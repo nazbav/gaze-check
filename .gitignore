@@ -1,0 +1,9 @@
+/.venv/
+/models/
+/build/
+/dist/
+__pycache__/
+*.jsonl
+.pytest_cache/
+*.log
+*.pyc

@@ -1,0 +1,10 @@
+opencv-python==5.0.0.93
+numpy
+pillow
+pystray
+mss
+MNN==3.6.1  # MGazeNet (взгляд)
+# mediapipe ставится отдельно с --no-deps (install.bat): иначе тянет opencv-contrib 4.x поверх opencv 5,
+# а ещё matplotlib и sounddevice, которые нам не нужны (gaze_check/mp.py подменяет их заглушками)
+absl-py~=2.3
+flatbuffers~=25.9
