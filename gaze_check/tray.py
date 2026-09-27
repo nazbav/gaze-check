@@ -13,11 +13,12 @@ from PIL import Image, ImageDraw
 
 from .app import GRAY, GREEN, ORANGE, RED, Engine, Journal, Viewer, human_seconds
 from .models import DATA_DIR, FROZEN, MODELS_DIR, ROOT, models_ready
+from .mouse import JOY_SPEEDS
 
 APP = "GazeCheck"
 SETTINGS = DATA_DIR / "settings.json"
 DEFAULTS = {"away_after": 60, "sound": True, "phone": True, "clicks": True, "lead_eye": "both",
-            "menu_gestures": False, "camera": "0", "mouse_mode": "joystick", "show_dot": False,
+            "menu_gestures": False, "camera": "0", "mouse_mode": "joystick", "joy_speed": 2.0, "show_dot": False,
             "gaze_log": False}
 LEAD_NAMES = {"left": "Левый", "right": "Правый", "both": "Оба"}
 AWAY_CHOICES = (30, 60, 120, 300)
@@ -131,6 +132,7 @@ def run_tray(args):
     args.no_clicks = args.no_clicks or not settings["clicks"]
     args.lead_eye = args.lead_eye or settings["lead_eye"]
     args.mouse_mode = args.mouse_mode or settings["mouse_mode"]
+    args.joy_speed = args.joy_speed or settings["joy_speed"]
     args.menu_gestures = args.menu_gestures or settings["menu_gestures"]
 
     icon = pystray.Icon(APP, icon_image(GRAY), "Gaze Check — запуск…")
@@ -202,6 +204,12 @@ def run_tray(args):
             if engine.mouse is not None:  # включена — пересоздать в новом режиме
                 engine.set_mouse(False)
                 engine.set_mouse(True)
+        return action
+
+    def set_joy_speed(speed):
+        def action(_icon, _item):
+            engine.set_joy_speed(speed)
+            save(joy_speed=speed)
         return action
 
     def toggle_menu(_icon, _item):
@@ -281,6 +289,10 @@ def run_tray(args):
                  checked=lambda i: engine.mouse_mode == "joystick"),
             item("Прямо за взглядом", set_mouse_mode("direct"), radio=True,
                  checked=lambda i: engine.mouse_mode == "direct"))),
+        item("Мышь взглядом: скорость джойстика", menu(*[
+            item("%s (×%g)" % (name, speed), set_joy_speed(speed), radio=True,
+                 checked=lambda i, speed=speed: abs(engine.joy_speed - speed) < 1e-6)
+            for speed, name in JOY_SPEEDS.items()])),
         item("Меню взглядом: открывать морганием (3 раза)", toggle_menu_gestures,
              checked=lambda i: engine.menu_gestures),
         item("Открыть меню взглядом (Ctrl+Alt+M)", toggle_menu),

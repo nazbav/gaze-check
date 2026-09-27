@@ -238,13 +238,18 @@ class Fixation:
 JOY_START_CM, JOY_START_S, JOY_STOP_CM = 3.0, 0.25, 1.5
 JOY_V0, JOY_ACCEL, JOY_VMAX, JOY_BRAKE = 2.0, 3.0, 40.0, 2.5  # см/с, см/с², см/с, 1/с (скорость ≤ BRAKE·расстояние)
 JOY_TURN_DEG = 60.0  # направление сменилось больше чем на столько — разгон заново
+JOY_BRAKE_MAX = 12.0  # 1/с: торможение не резче — за шаг 1/100 с курсор не перескочит цель
+# скорость джойстика — множитель к JOY_V0, JOY_ACCEL, JOY_VMAX и торможению (меню трея)
+JOY_SPEEDS = {0.5: "Очень медленно", 1.0: "Медленно", 2.0: "Средне", 3.0: "Быстро", 4.5: "Очень быстро"}
+JOY_SPEED_DEFAULT = 2.0  # ×1 (было по умолчанию) — 10 см за ~2,5 с, раздражало
 
 
 class Cursor:
     """Движение системного курсора в своём потоке; рука на мыши — пауза.
     mode "joystick" — едет в сторону взгляда с разгоном; "direct" — плавно встаёт в точку взгляда."""
 
-    def __init__(self, get_pos=None, set_pos=None, clock=time.monotonic, hz=100, mode="joystick", px_per_cm=74.0):
+    def __init__(self, get_pos=None, set_pos=None, clock=time.monotonic, hz=100, mode="joystick", px_per_cm=74.0,
+                 speed=1.0):
         self.get_pos = get_pos or _get_cursor
         self.set_pos = set_pos or _set_cursor
         self.clock = clock
@@ -257,6 +262,7 @@ class Cursor:
         self.stop_event = threading.Event()
         self.thread = None
         self.mode, self.px_per_cm = mode, px_per_cm
+        self.speed = speed  # множитель скорости джойстика, можно менять на ходу
         self.moving = False
         self.away_since = None  # с какого времени взгляд дальше порога «тронуться»
         self.push_since, self.push_dir = None, None  # разгон: с какого времени и в какую сторону
@@ -322,7 +328,9 @@ class Cursor:
                 self.push_since = now  # взгляд ушёл в другую сторону — разгон заново
         if self.push_dir is None or self.push_since == now:
             self.push_dir = direction
-        speed = min(JOY_V0 + JOY_ACCEL * (now - self.push_since), JOY_VMAX, JOY_BRAKE * dist_cm)  # см/с
+        k = self.speed
+        speed = min(k * (JOY_V0 + JOY_ACCEL * (now - self.push_since)), k * JOY_VMAX,
+                    min(JOY_BRAKE * k, JOY_BRAKE_MAX) * dist_cm)  # см/с
         step = speed * self.px_per_cm * dt
         self.pos = (self.pos[0] + direction[0] * step, self.pos[1] + direction[1] * step)
         return True
@@ -342,14 +350,15 @@ class Cursor:
 class GazeMouse:
     """Всё вместе: точка взгляда и коэффициент моргания с каждого кадра → курсор и клики."""
 
-    def __init__(self, screen, px_per_cm, beep=None, click=None, cursor=None, gestures=None, mode="joystick"):
+    def __init__(self, screen, px_per_cm, beep=None, click=None, cursor=None, gestures=None, mode="joystick",
+                 speed=1.0):
         self.screen = tuple(screen)  # (left, top, w, h) — точки взгляда от его левого верхнего угла
         self.fix = Fixation(FIX_CM * px_per_cm)
         self.gestures = gestures or Gestures()  # общий с программой (жесты нужны и меню)
         self.held = False  # меню взглядом открыто — курсор стоит, клики — меню
         self.beep = beep or (lambda kind: None)
         self.click = click or _click
-        self.cursor = cursor or Cursor(mode=mode, px_per_cm=px_per_cm)
+        self.cursor = cursor or Cursor(mode=mode, px_per_cm=px_per_cm, speed=speed)
         self.anchor = None  # где был курсор, когда закрылись глаза
         self.settle_until = -1e9
         self.clicked = []  # (t, "left"/"right") — для журнала и чтобы не учить калибровку на них

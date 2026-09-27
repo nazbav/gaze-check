@@ -376,6 +376,8 @@ class Engine:
         self.gestures = Gestures()  # жесты глазами: клики мыши взглядом и меню
         self.menu = MenuLogic(run=self._menu_action)  # меню взглядом (9 плиток)
         self.mouse_mode = getattr(args, "mouse_mode", None) or "joystick"  # джойстик / прямо за взглядом
+        from .mouse import JOY_SPEED_DEFAULT
+        self.joy_speed = float(getattr(args, "joy_speed", None) or JOY_SPEED_DEFAULT)  # множитель скорости
         self.gazelog = None  # лёгкий журнал взгляда (gazelog.GazeLog), когда пишется
         self.log_probe = None
         self.log_closed_at = None
@@ -626,6 +628,12 @@ class Engine:
         app, title = self.log_probe(point) if name in GRID_ZONES else ("", "")  # за экраном окна нет
         log.sample(ts, point, eye.get("dist"), flags, zone, ("%s — %s" % (app, title)) if app else "")
 
+    def set_joy_speed(self, speed):
+        """Скорость джойстика (множитель) — сразу, без перезапуска мыши."""
+        self.joy_speed = float(speed)
+        if self.mouse is not None:
+            self.mouse.cursor.speed = self.joy_speed
+
     def set_mouse(self, on):
         """Включить/выключить управление мышью взглядом. → включено ли теперь."""
         from .mouse import GazeMouse
@@ -637,7 +645,7 @@ class Engine:
                 _click(kind)
                 self.sound(kind)
             self.mouse = GazeMouse(cal.screen, cal.px_per_cm(), beep=self.sound, click=click,
-                                   gestures=self.gestures, mode=self.mouse_mode).start()
+                                   gestures=self.gestures, mode=self.mouse_mode, speed=self.joy_speed).start()
         elif not on and self.mouse is not None:
             mouse, self.mouse = self.mouse, None
             mouse.stop()
@@ -1101,6 +1109,8 @@ def _main(argv=None):
                     help="три моргания или глаза закрыты 3–5 с — открыть меню взглядом")
     ap.add_argument("--mouse-mode", choices=["joystick", "direct"], default=None,
                     help="мышь взглядом: джойстик (едет в сторону взгляда) или прямо за взглядом")
+    ap.add_argument("--joy-speed", type=float, default=None,
+                    help="скорость джойстика: множитель (0.5 — очень медленно … 4.5 — очень быстро; по умолчанию 2)")
     ap.add_argument("--lead-eye", choices=["left", "right", "both"], default=None,
                     help="ведущий глаз: по нему считается взгляд (по умолчанию оба)")
     ap.add_argument("--log", help="писать результаты в JSONL")

@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 
-from gaze_check.mouse import Cursor, Fixation, GazeMouse, Gestures
+from gaze_check.mouse import JOY_SPEED_DEFAULT, JOY_SPEEDS, Cursor, Fixation, GazeMouse, Gestures
 
 FPS = 30
 
@@ -340,3 +340,37 @@ def test_joystick_turn_restarts_acceleration():
     before = m.pos
     p = _joy(m, c, (m.pos[0], 100), 0.3)  # резко посмотрел вверх — снова медленно
     assert abs(p[0] - before[0]) < 20 and before[1] - p[1] < 0.3 * 74 * 4
+
+
+def _time_to_reach(speed, dist_cm=10.0, px=74.0):
+    m = FakeMouse()
+    m.pos = (400, 800)
+    c = Cursor(get_pos=m.get, set_pos=m.set, clock=lambda: m.t, px_per_cm=px, speed=speed)
+    target, t, far = (400 + dist_cm * px, 800), 0.0, 0.0
+    while math.hypot(m.pos[0] - target[0], m.pos[1] - target[1]) / px > 2.0 and t < 10:
+        _joy(m, c, target, 0.05)
+        t += 0.05
+        far = max(far, m.pos[0])
+    return t, (far - target[0]) / px
+
+
+def test_joystick_speed_setting():
+    """Скорость джойстика из меню: быстрее — раньше доезжает, но не проскакивает цель."""
+    times = {k: _time_to_reach(k) for k in JOY_SPEEDS}
+    order = [times[k][0] for k in sorted(JOY_SPEEDS)]
+    assert order == sorted(order, reverse=True) and len(set(order)) == len(order)
+    assert times[1.0][0] > 1.8 and times[JOY_SPEED_DEFAULT][0] < 1.6 and times[4.5][0] < 1.0
+    assert all(over <= 0.01 for _, over in times.values())  # не проскочил
+
+
+def test_joystick_speed_changes_on_the_fly_and_ignores_jitter():
+    m = FakeMouse()
+    m.pos = (1280, 800)
+    c = Cursor(get_pos=m.get, set_pos=m.set, clock=lambda: m.t, px_per_cm=74.0, speed=4.5)
+    rng = np.random.default_rng(1)
+    for _ in range(200):  # самая большая скорость — дрожание взгляда всё равно не двигает
+        _joy(m, c, (1280 + rng.normal(0, 60), 800 + rng.normal(0, 60)), 0.01)
+    assert m.pos == (1280, 800)
+    c.speed = 0.5
+    p = _joy(m, c, (2400, 800), 1.0)
+    assert (p[0] - 1280) / 74 < 2.5  # сменили на «очень медленно» — едет медленно
