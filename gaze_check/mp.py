@@ -22,4 +22,18 @@ def mediapipe():
         sys.modules["matplotlib"].pyplot = sys.modules["matplotlib.pyplot"]
     import mediapipe as mp
     from mediapipe.tasks.python import BaseOptions, vision
+    _offline()
     return mp, vision, BaseOptions
+
+
+_blocked = None
+
+
+def _offline():
+    """Загрузить библиотеку MediaPipe и сразу отрезать ей сеть (см. offline.py) — до первой модели."""
+    global _blocked
+    if _blocked is None:
+        from mediapipe.tasks.python.core import mediapipe_c_bindings
+        from .offline import block_network
+        _blocked = block_network(mediapipe_c_bindings.load_raw_library()._handle)
+    return _blocked
