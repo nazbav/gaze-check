@@ -325,6 +325,14 @@ class Latest:
             return None
 
 
+def camera_name(source):
+    """Имя камеры DirectShow по номеру (калибровки у каждой камеры свои); файл — None."""
+    if not str(source).isdigit():
+        return None
+    from .cameras import list_cameras
+    return dict(list_cameras()).get(int(source)) or "Камера %s" % source
+
+
 CAMERA_SIZE = "1920x1080"  # разрешение по умолчанию: сеть смотрит на глаз 112×112 — в 1080p он такой и есть
 CAMERA_FPS = 30  # какой частоты режим просить у камеры
 LOW_FPS = 18  # меньше — камере не хватает света (подсказка в меню)
@@ -399,12 +407,24 @@ class Engine:
         self.away_after = args.away_after
         self.epoch = 0  # растёт на паузе — таймер взгляда начинает заново
         self.threads = []
+        from . import models
         from .calib import primary_monitor, screen_mm
+        from .calstore import CalStore
         from .eyes import Calibration
-        from .models import CALIBRATION
+        from .light import LightWatch
         screen = primary_monitor()
+        # набор калибровок: у каждой камеры и света своя (calstore.py, light.py)
+        self.camera = None if self.is_file else camera_name(args.source)
+        self.store = CalStore(models.CALIBRATIONS, screen, legacy=models.CALIBRATION, camera=self.camera)
+        self.light = LightWatch()  # свет по кадрам камеры
+        self.light_auto = bool(getattr(args, "light_auto", True))  # выбирать калибровку по свету самой
+        self.light_pick = None  # (калибровка, сколько проверок подряд она заметно ближе по свету)
+        self.new_light_since, self.new_light_told = None, False  # незнакомый свет — одно напоминание
+        self.light_logged = None  # свет, записанный в журнал последним (пишется, когда заметно сменился)
+        start = (self.store.nearest(self.camera, None)[0] if self.camera
+                 else max(self.store.items, key=lambda c: c.meta.get("used", 0), default=None))
         # без калибровки — средние параметры 3D-модели; клики и калибровка их уточняют
-        self.calibration = (Calibration.load(CALIBRATION, screen)
+        self.calibration = (start or (Calibration.load(models.CALIBRATION, screen) if self.is_file else None)
                             or Calibration.default(screen, screen_mm(screen)))
         self.collect = None  # список — калибровка собирает сюда признаки глаз
         self.recorder = None
@@ -489,28 +509,124 @@ class Engine:
             return True
         return presence(time.monotonic() if now is None else now, s["person_at"], s["face_at"])
 
-    def set_calibration(self, cal):
-        """Новая калибровка по точкам (клики, накопленные раньше, калибровка уже учла)."""
-        from .models import CALIBRATION
+    def set_calibration(self, cal, since=None, quick=False):
+        """Новая калибровка по точкам (клики, накопленные раньше, калибровка уже учла) → в набор.
+        Её свет — медиана за время калибровки (since — начало, monotonic). Полная при том же свете
+        заменяет калибровку этого света, иначе добавляется; быстрая подстройка при свете текущей
+        калибровки дополняет её (тот же файл), при другом — новая калибровка под этот свет, а
+        текущая остаётся как была."""
+        from .light import SAME, distance
         cal.lead = self.lead  # признаки в ней посчитаны по текущему ведущему глазу
-        cal.save(CALIBRATION)
+        light = (self.light.between(since, time.monotonic()) if since is not None else None) or self.light.current()
+        if self.camera is not None:
+            cur = self.calibration
+            if quick:
+                same = cur.meta.get("id") and distance(light, cur.meta.get("light")) <= SAME
+                replace = cur if same else None
+                light = cur.meta["light"] if same else light  # свет калибровки не плывёт от подстроек
+            else:
+                replace = self.store.same_light(self.camera, light)
+            self.store.put(cal, self.camera, light, replace)
         self.calibration = cal
+        self.light_pick, self.new_light_since, self.new_light_told = None, None, False
         self.dirty, self.saved_at = False, time.monotonic()
         self._show_accuracy()
 
     def _save_calibration(self):
         """Подстроенную по кликам калибровку — на диск (раз в SAVE_EVERY и при выходе)."""
-        from .models import CALIBRATION
         cal = self.calibration
         if cal is not None and self.dirty:
             try:
-                cal.save(CALIBRATION)
+                if cal.meta.get("id"):
+                    self.store.update(cal)
+                elif self.camera is not None and cal.calibrated:  # выучилась по кликам с нуля — в набор
+                    self.store.put(cal, self.camera, self.light.current())
             except OSError:
                 traceback.print_exc()
             self.dirty = False
             self.saved_at = time.monotonic()
 
+    LIGHT_EVERY = 10.0  # с: как часто сверять свет с калибровками
+    LIGHT_MARGIN = 0.75  # насколько другая калибровка должна быть ближе по свету, чтобы на неё перейти
+    LIGHT_CONFIRM = 2  # столько проверок подряд — чтобы не дёргалось от белой страницы на тёмном
+    NEW_LIGHT_AFTER = 60.0  # с незнакомого света — одно напоминание о быстрой подстройке
+
+    def _pick_light(self, now):
+        """Раз в LIGHT_EVERY: калибровка под текущий свет. Переход — если другая калибровка этой камеры
+        заметно ближе по свету LIGHT_CONFIRM проверок подряд; незнакомый свет — одно напоминание."""
+        import math
+        from .light import KEYS, NEW, describe, distance
+        sig = self.light.current()
+        if sig is None or self.camera is None:
+            return
+        best, d = self.store.nearest(self.camera, sig)
+        if distance(sig, self.light_logged) >= 1.0:  # в журнал — чтобы по живой работе подбирать пороги
+            self.light_logged = sig
+            near = ", ".join("%s %.1f" % ((c.created or "")[11:16] or c.meta["id"][:4], distance(sig, c.meta.get("light")))
+                             for c in self.store.for_camera(self.camera))
+            print(time.strftime("%H:%M:%S"), "свет: %s (%s); до калибровок: %s" % (
+                describe(sig), " ".join("%s=%.2f" % (k, sig[k]) for k in KEYS), near or "нет"), flush=True)
+        if best is not None and d > NEW:
+            self.new_light_since = self.new_light_since or now
+            if now - self.new_light_since >= self.NEW_LIGHT_AFTER and not self.new_light_told:
+                self.new_light_told = True
+                text = ("Свет не похож ни на одну калибровку (%s). Быстрая подстройка Ctrl+Alt+C — 5 точек, "
+                        "~8 с — запомнит его." % describe(sig))
+                print(time.strftime("%H:%M:%S"), text, flush=True)
+                if getattr(self.journal, "notify", None):
+                    self.journal.notify(text)
+        elif d <= NEW:
+            self.new_light_since, self.new_light_told = None, False
+        cur = self.calibration
+        if not self.light_auto or best is None or best.meta.get("id") == cur.meta.get("id"):
+            self.light_pick = None
+            return
+        cur_d = distance(sig, cur.meta.get("light")) if cur.meta.get("camera") == self.camera else math.inf
+        if d + self.LIGHT_MARGIN < cur_d:
+            n = self.light_pick[1] + 1 if self.light_pick and self.light_pick[0] is best else 1
+            self.light_pick = (best, n)
+            if n >= self.LIGHT_CONFIRM:
+                self._use(best, "свет сейчас: %s" % describe(sig))
+        else:
+            self.light_pick = None
+
+    def _use(self, cal, why):
+        """Взять калибровку из набора (другой свет, другая камера, выбрали руками)."""
+        from .calstore import title
+        cal.meta["used"] = time.time()
+        self.calibration = cal
+        self.light_pick = None
+        self._show_accuracy()
+        print(time.strftime("%H:%M:%S"), "калибровка:", title(cal), "—", why, flush=True)
+        self._relead()  # посчитана по другому ведущему глазу — пересчитать
+
+        def save():  # 1–2 МБ — не в цикле глаз
+            try:
+                self.store.save(cal)
+            except OSError:
+                traceback.print_exc()
+        threading.Thread(target=save, daemon=True).start()
+
+    def choose_calibration(self, cal_id):
+        """Выбрали калибровку руками — она, а выбор по свету выключается. → нашлась ли."""
+        for cal in self.store.items:
+            if cal.meta.get("id") == cal_id:
+                self.light_auto = False
+                self._use(cal, "выбрана вручную")
+                return True
+        return False
+
+    def _pick_camera(self):
+        """Сменили камеру: калибровки у неё свои — последняя выбранная для неё, свет — заново."""
+        from .light import LightWatch
+        self.camera = camera_name(self.args.source)
+        self.light, self.light_pick = LightWatch(), None
+        found, _ = self.store.nearest(self.camera, None)
+        if found is not None:
+            self._use(found, "камера: %s" % self.camera)
+
     def _show_accuracy(self):
+        from .light import describe
         cal = self.calibration
         cm = cal.px_per_cm()
         parts = []
@@ -522,7 +638,8 @@ class Engine:
             parts.append("дрожание ~%.1f см" % (cal.jitter_px / cm))
         if cal.click_error_px is not None:
             parts.append("по кликам ~%.1f см" % (cal.click_error_px / cm))
-        self.state.set(accuracy=", ".join(parts) if cal.calibrated else "без калибровки")
+        light = describe(cal.meta.get("light")) + " · " if cal.meta.get("id") else ""
+        self.state.set(accuracy=light + ", ".join(parts) if cal.calibrated else "без калибровки")
 
     def set_lead_eye(self, lead):
         """Ведущий глаз: "left" / "right" / "both". Калибровка пересчитывается в фоне."""
@@ -537,7 +654,6 @@ class Engine:
             return
 
         def work():
-            from .models import CALIBRATION
             try:
                 new = cal.relead(self.lead)
             except Exception:
@@ -545,7 +661,10 @@ class Engine:
                 return
             if self.calibration is cal:  # пока считали, калибровку не заменили
                 self.calibration = new
-                new.save(CALIBRATION)
+                try:
+                    self.store.update(new)
+                except OSError:
+                    traceback.print_exc()
                 self._show_accuracy()
                 print(time.strftime("%H:%M:%S"), "ведущий глаз:", self.lead, "—",
                       self.state.snapshot()["accuracy"], flush=True)
@@ -750,6 +869,7 @@ class Engine:
         """Глаза на каждом кадре (~10 мс на процессоре): точка взгляда на экране и смотрит ли
         в экран; раз в STATUS_EVERY — счёт времени, журнал и тревога."""
         from .eyes import LOOSE_MARGIN, SCREEN_MARGIN, EyeTracker, OneEuro, ScreenGaze
+        from .light import signature
         from .models import EYE_MODEL, GAZENET_MODEL, to_rgb
         try:
             tracker = EyeTracker(EYE_MODEL, GAZENET_MODEL, async_net=True)
@@ -764,10 +884,17 @@ class Engine:
         smooth, cal = OneEuro(), None
         judge, timer, epoch, status_at, latency = ScreenGaze(), None, None, -1e9, None
         recent = collections.deque(maxlen=MEDIAN_FRAMES)  # (ts, точка) — для медианы
+        light_at = -1e9
         for frame, seq, ts in self._frames():
             t0 = time.perf_counter()
             self._take_clicks(ts)
             feat, pts, rays = tracker.process(to_rgb(frame), ts)
+            if self.light.due(ts):  # свет — раз в секунду, только когда лицо в кадре
+                gate = self.gate
+                self.light.add(ts, signature(frame, pts, gate.fps if gate else 0.0) if pts is not None else None)
+            if ts - light_at >= self.LIGHT_EVERY:
+                light_at = ts
+                self._pick_light(ts)
             if cal is not self.calibration:
                 smooth, cal = OneEuro(), self.calibration  # новая калибровка — сглаживание заново
             raw = point = None
@@ -837,6 +964,7 @@ class Engine:
             return False
         self.args.source = source
         self.reopen.set()
+        self._pick_camera()
         return True
 
     def set_size(self, size):
@@ -976,7 +1104,11 @@ def run_image(args):
     feat, pts, rays = EyeTracker(EYE_MODEL, GAZENET_MODEL).process(rgb, 0.0)
     from .calib import primary_monitor, screen_mm
     screen = primary_monitor()
-    cal = Calibration.load(CALIBRATION, screen) or Calibration.default(screen, screen_mm(screen))
+    from .calstore import CalStore
+    from .models import CALIBRATIONS
+    cals = CalStore(CALIBRATIONS, screen).items
+    cal = (max(cals, key=lambda c: c.meta.get("used", 0), default=None) or Calibration.load(CALIBRATION, screen)
+           or Calibration.default(screen, screen_mm(screen)))
     point = cal.predict(feat) if feat is not None and "gy" in feat else None
     label, share = ScreenGaze().update(0.0, feat, pts is not None, point, cal.screen)
     state.gaze = {"top": label, "confidence": share,

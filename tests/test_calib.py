@@ -83,7 +83,7 @@ def test_calibration_flow_fits_checks_and_saves(monkeypatch, tmp_path):
     state.eye = {"valid": True}
     saved = {}
     engine = types.SimpleNamespace(state=state, collect=None, calibration=None,
-                                   set_calibration=lambda cal: saved.setdefault("cal", cal))
+                                   set_calibration=lambda cal, **kw: saved.setdefault("cal", cal))
     stop = threading.Event()
 
     def eyes():  # «человек» честно смотрит на текущую точку
@@ -144,7 +144,7 @@ def test_quick_adjust_adds_current_pose(monkeypatch):
     state.eye = {"valid": True}
     saved = {}
     engine = types.SimpleNamespace(state=state, collect=None, calibration=old,
-                                   set_calibration=lambda cal: saved.setdefault("cal", cal))
+                                   set_calibration=lambda cal, **kw: saved.setdefault("cal", cal))
     stop = threading.Event()
 
     def eyes():  # в новой позе: голова ниже и дальше
@@ -214,7 +214,7 @@ def test_one_eye_calibration_is_added_not_replacing(monkeypatch):
     state.eye = {"valid": True}
     saved = {}
     engine = types.SimpleNamespace(state=state, collect=None, calibration=old, lead="left",
-                                   set_calibration=lambda cal: saved.setdefault("cal", cal))
+                                   set_calibration=lambda cal, **kw: saved.setdefault("cal", cal))
     stop = threading.Event()
 
     def eyes():  # второй глаз закрыт: сеть не считается

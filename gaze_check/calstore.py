@@ -3,6 +3,7 @@
 когда последний раз выбрана. Прежний calibration.json при первом запуске становится первой
 калибровкой (свет неизвестен) и не трогается — чтобы можно было вернуться на старую версию."""
 import math
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -28,6 +29,7 @@ class CalStore:
     def __init__(self, folder, screen, legacy=None, camera=None):
         self.folder, self.screen = Path(folder), tuple(screen)
         self.items = []  # Calibration с meta["id"]
+        self.lock = threading.Lock()  # пишут из разных потоков: клики, выбор по свету, калибровка
         fresh = not self.folder.is_dir()
         if not fresh:
             for p in sorted(self.folder.glob("*.json")):
@@ -77,4 +79,5 @@ class CalStore:
         self.save(cal)
 
     def save(self, cal):
-        cal.save(self.folder / ("%s.json" % cal.meta["id"]))
+        with self.lock:
+            cal.save(self.folder / ("%s.json" % cal.meta["id"]))

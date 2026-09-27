@@ -28,9 +28,12 @@ def walk(menu):
 
 
 @pytest.mark.parametrize("show_dot", [False, True])
-def test_tray_menu_builds(monkeypatch, show_dot):
+def test_tray_menu_builds(monkeypatch, tmp_path, show_dot):
     import gaze_check.tray as tray  # не при сборе тестов: pystray и прочее грузятся только здесь
+    from gaze_check import models
     from gaze_check.app import _main
+    monkeypatch.setattr(models, "CALIBRATIONS", tmp_path / "calibrations")  # не трогать настоящие калибровки
+    monkeypatch.setattr(models, "CALIBRATION", tmp_path / "calibration.json")
     settings = dict(tray.DEFAULTS, show_dot=show_dot)
     monkeypatch.setattr(tray.pystray, "Icon", FakeIcon)
     monkeypatch.setattr(tray, "single_instance", lambda: True)
@@ -48,5 +51,6 @@ def test_tray_menu_builds(monkeypatch, show_dot):
     assert "Разрешение" in texts and "Кадров в секунду" in texts
     assert any(t.startswith("Сейчас:") for t in texts)
     assert "Сколько даёт камера (до 30)" in texts
+    assert "Калибровки (под свет и камеру)" in texts and "Выбирать по свету сам" in texts
     dot = next(i for i in items if i.text == "Показывать точку взгляда")
     assert dot.checked is show_dot

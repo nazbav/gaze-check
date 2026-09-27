@@ -19,7 +19,7 @@ APP = "GazeCheck"
 SETTINGS = DATA_DIR / "settings.json"
 DEFAULTS = {"away_after": 60, "sound": True, "phone": True, "clicks": True, "lead_eye": "both",
             "menu_gestures": False, "camera": "0", "mouse_mode": "joystick", "joy_speed": 2.0, "show_dot": False,
-            "gaze_log": False, "size": CAMERA_SIZE, "fps": 0}
+            "gaze_log": False, "size": CAMERA_SIZE, "fps": 0, "light_auto": True}
 LEAD_NAMES = {"left": "Левый", "right": "Правый", "both": "Оба"}
 FPS_LIMITS = {0: "Сколько даёт камера (до 30)", 15: "Не больше 15 — меньше нагрузка", 10: "Не больше 10"}
 AWAY_CHOICES = (30, 60, 120, 300)
@@ -137,6 +137,7 @@ def run_tray(args):
     args.menu_gestures = args.menu_gestures or settings["menu_gestures"]
     args.size = args.size or settings["size"]
     args.fps = settings["fps"] if args.fps is None else args.fps
+    args.light_auto = settings["light_auto"]
 
     icon = pystray.Icon(APP, icon_image(GRAY), "Gaze Check — запуск…")
     journal = Journal(args.log, sound=settings["sound"] and not args.quiet,
@@ -251,8 +252,8 @@ def run_tray(args):
             if not engine.set_camera(str(index)):
                 return
             save(camera=str(index))
-            icon.notify("Камера: %s. Калибровка делалась на прежней — лучше откалибровать заново." % name,
-                        "Gaze Check")
+            if not engine.store.for_camera(engine.camera):
+                icon.notify("Камера: %s. Калибровок для неё ещё нет — лучше откалибровать." % name, "Gaze Check")
 
             def fit_size(found):  # разрешения прежней камеры у новой нет — самое большое из её режимов
                 sizes = ["%dx%d" % (w, h) for w, h, _ in found]
@@ -291,6 +292,27 @@ def run_tray(args):
             return "Сейчас: камера не снимает"
         size = "%d×%d, " % s["camera_size"] if s["camera_size"] else ""
         return "Сейчас: %s%d к/с" % (size, round(fps)) + (" — мало света на лице" if fps < LOW_FPS else "")
+
+    def choose(cal_id):
+        def action(_icon, _item):
+            engine.choose_calibration(cal_id)
+            save(light_auto=False)
+        return action
+
+    def toggle_light_auto(_icon, _item):
+        engine.light_auto = not engine.light_auto
+        engine.light_pick = None
+        save(light_auto=engine.light_auto)
+
+    def calibration_items():
+        """Калибровки текущей камеры (последние выбранные — выше) и выбор по свету."""
+        from .calstore import title
+        cams = sorted(engine.store.for_camera(engine.camera), key=lambda c: -c.meta.get("used", 0))
+        items = [item(title(c), choose(c.meta["id"]), radio=True,
+                      checked=lambda i, cid=c.meta["id"]: engine.calibration.meta.get("id") == cid) for c in cams]
+        return (items or [item("Для этой камеры калибровок нет", None, enabled=False)]) + [
+            menu.SEPARATOR,
+            item("Выбирать по свету сам", toggle_light_auto, checked=lambda i: engine.light_auto)]
 
     def quick(_icon, _item):
         engine.requests.add("quick")
@@ -343,6 +365,7 @@ def run_tray(args):
         menu.SEPARATOR,
         item("Калибровка взгляда…", calibrate),
         item("Быстрая подстройка (Ctrl+Alt+C)", quick),
+        item("Калибровки (под свет и камеру)", menu(calibration_items)),
         item("Проверка взгляда…", gaze_test),
         item("Показывать точку взгляда", toggle_dot, checked=lambda i: ui["dot"]),
         item("Мышь — взглядом (Ctrl+Alt+G)", toggle_mouse, checked=lambda i: engine.mouse is not None),

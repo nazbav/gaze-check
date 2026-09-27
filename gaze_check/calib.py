@@ -126,6 +126,7 @@ def run_calibration(engine):
     monitor = primary_monitor()
     size = screen_mm(monitor)
     scr = Screen(monitor)
+    since = time.monotonic()  # свет калибровки — за всё её время
     w, h = scr.w, scr.h
     points = calibration_points(w, h)
     checks = check_points(w, h)
@@ -193,7 +194,7 @@ def run_calibration(engine):
             checked = [(p, np.median(cal.predict_many(got), axis=0)) for p, got in raw_checks if got]
             key = _review(scr, cal, points, samples, checked)
             if key == 13 and _good(cal):
-                engine.set_calibration(cal)
+                engine.set_calibration(cal, since=since)
                 return cal
             if key == 27:
                 return None
@@ -213,6 +214,7 @@ def run_quick(engine):
     if old is None or not old.points or tuple(old.screen) != tuple(monitor):
         return run_calibration(engine)  # подстраивать нечего — полная калибровка
     scr = Screen(monitor)
+    since = time.monotonic()
     w, h = scr.w, scr.h
     points = [(w // 2, h // 2)] + edge_points(w, h)
     try:
@@ -227,7 +229,8 @@ def run_quick(engine):
         samples = (list(old.points) + got)[-MAX_POINT_FRAMES:]
         cal = Calibration.fit(monitor, samples, old.size_mm, clicks=old.clicks, moving=old.moving)
         cal.check_px, cal.checks, cal.jitter_px = old.check_px, old.checks, old.jitter_px
-        engine.set_calibration(cal)
+        # свет тот же, что у текущей калибровки, — дополняет её; другой — новая калибровка под этот свет
+        engine.set_calibration(cal, since=since, quick=True)
         return cal
     finally:
         engine.collect = None

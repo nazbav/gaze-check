@@ -12,7 +12,8 @@ def test_list_cameras_numbers_in_order():
 
 def test_set_camera_asks_reader_to_reopen():
     from gaze_check.app import Engine
-    eng = types.SimpleNamespace(is_file=False, args=types.SimpleNamespace(source="0"), reopen=threading.Event())
+    eng = types.SimpleNamespace(is_file=False, args=types.SimpleNamespace(source="0"), reopen=threading.Event(),
+                                _pick_camera=lambda: None)
     assert Engine.set_camera(eng, "0") is False and not eng.reopen.is_set()  # та же — ничего
     assert Engine.set_camera(eng, "1") is True
     assert eng.args.source == "1" and eng.reopen.is_set()

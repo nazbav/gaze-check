@@ -24,7 +24,8 @@ MODELS_DIR = _models_dir()
 DETECTOR_MODEL = MODELS_DIR / "efficientdet_lite0.tflite"
 EYE_MODEL = MODELS_DIR / "face_landmarker.task"
 GAZENET_MODEL = MODELS_DIR / "mgazenet.mnn"  # из GazeFollower, CC BY-NC-SA 4.0
-CALIBRATION = DATA_DIR / "calibration.json"
+CALIBRATION = DATA_DIR / "calibration.json"  # прежняя одна калибровка — переезжает в набор (calstore.py)
+CALIBRATIONS = DATA_DIR / "calibrations"  # набор: у каждой камеры и света своя
 GAZEFOLLOWER_COMMIT = "13806edabefe76fc6b964c4c5bdcd62846c1ac1d"
 # откуда брать модели для разработки (в exe они уже внутри)
 MODEL_URLS = {
