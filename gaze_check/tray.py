@@ -11,7 +11,7 @@ import cv2
 import pystray
 from PIL import Image, ImageDraw
 
-from .app import GRAY, GREEN, ORANGE, RED, Engine, Journal, Viewer, human_seconds
+from .app import CAMERA_SIZE, GRAY, GREEN, LOW_FPS, ORANGE, RED, Engine, Journal, Viewer, human_seconds
 from .models import DATA_DIR, FROZEN, MODELS_DIR, ROOT, models_ready
 from .mouse import JOY_SPEEDS
 
@@ -19,8 +19,9 @@ APP = "GazeCheck"
 SETTINGS = DATA_DIR / "settings.json"
 DEFAULTS = {"away_after": 60, "sound": True, "phone": True, "clicks": True, "lead_eye": "both",
             "menu_gestures": False, "camera": "0", "mouse_mode": "joystick", "joy_speed": 2.0, "show_dot": False,
-            "gaze_log": False}
+            "gaze_log": False, "size": CAMERA_SIZE, "fps": 0}
 LEAD_NAMES = {"left": "Левый", "right": "Правый", "both": "Оба"}
+FPS_LIMITS = {0: "Сколько даёт камера (до 30)", 15: "Не больше 15 — меньше нагрузка", 10: "Не больше 10"}
 AWAY_CHOICES = (30, 60, 120, 300)
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -134,6 +135,8 @@ def run_tray(args):
     args.mouse_mode = args.mouse_mode or settings["mouse_mode"]
     args.joy_speed = args.joy_speed or settings["joy_speed"]
     args.menu_gestures = args.menu_gestures or settings["menu_gestures"]
+    args.size = args.size or settings["size"]
+    args.fps = settings["fps"] if args.fps is None else args.fps
 
     icon = pystray.Icon(APP, icon_image(GRAY), "Gaze Check — запуск…")
     journal = Journal(args.log, sound=settings["sound"] and not args.quiet,
@@ -225,16 +228,69 @@ def run_tray(args):
             save(lead_eye=lead)
         return action
 
-    from .cameras import list_cameras
+    from .cameras import list_cameras, list_modes
     cameras = list_cameras() or [(int(args.source), "Камера %s" % args.source)]  # перечислить не вышло
+    modes = {}  # номер камеры → [(ширина, высота, частота)]; узнаём в фоне (~0,3 с), меню ждать не должно
+
+    def learn_modes(index, then=None):
+        def work():
+            try:
+                modes[index] = list_modes(index)
+            except Exception:
+                traceback.print_exc()
+                modes[index] = []
+            if then is not None:
+                then(modes[index])
+            icon.update_menu()
+        if not args.source.isdigit():
+            return
+        threading.Thread(target=work, daemon=True).start()
 
     def set_camera(index, name):
         def action(_icon, _item):
-            if engine.set_camera(str(index)):
-                save(camera=str(index))
-                icon.notify("Камера: %s. Калибровка делалась на прежней — лучше откалибровать заново." % name,
-                            "Gaze Check")
+            if not engine.set_camera(str(index)):
+                return
+            save(camera=str(index))
+            icon.notify("Камера: %s. Калибровка делалась на прежней — лучше откалибровать заново." % name,
+                        "Gaze Check")
+
+            def fit_size(found):  # разрешения прежней камеры у новой нет — самое большое из её режимов
+                sizes = ["%dx%d" % (w, h) for w, h, _ in found]
+                if sizes and engine.args.size not in sizes:
+                    engine.set_size(sizes[0])
+                    save(size=sizes[0])
+            learn_modes(index, fit_size)
         return action
+
+    def set_size(size):
+        def action(_icon, _item):
+            if engine.set_size(size):
+                save(size=size)
+        return action
+
+    def set_fps(limit):
+        def action(_icon, _item):
+            engine.set_fps(limit)
+            save(fps=limit)
+        return action
+
+    def size_items():
+        found = modes.get(int(engine.args.source)) if engine.args.source.isdigit() else None
+        if found is None:
+            return [item("Узнаю режимы камеры…", None, enabled=False)]
+        if not found:  # перечислить не вышло — привычные разрешения
+            found = [(1920, 1080, 0), (1280, 720, 0), (640, 480, 0)]
+        return [item("%d×%d" % (w, h) + (" (до %d к/с)" % fps if fps else ""), set_size("%dx%d" % (w, h)),
+                     radio=True, checked=lambda i, s="%dx%d" % (w, h): engine.args.size == s)
+                for w, h, fps in found]
+
+    def fps_text(_item=None):
+        s = engine.state.snapshot()
+        fps = s["camera_fps"]
+        if not fps:
+            return "Сейчас: камера не снимает"
+        size = "%d×%d, " % s["camera_size"] if s["camera_size"] else ""
+        return "Сейчас: %s%d к/с" % (size, round(fps)) + (" — мало света на лице" if fps < LOW_FPS else "")
 
     def quick(_icon, _item):
         engine.requests.add("quick")
@@ -274,10 +330,16 @@ def run_tray(args):
         item("Показать камеру", toggle_window, default=True, checked=lambda i: ui["window"]),
         item("Без звука", toggle_sound, checked=lambda i: not journal.sound),
         item("Пауза (камера выключена)", toggle_pause, checked=lambda i: engine.paused.is_set()),
-        item("Камера", menu(*[
-            item(name, set_camera(index, name), radio=True,
-                 checked=lambda i, index=index: engine.args.source == str(index))
-            for index, name in cameras])),
+        item("Камера", menu(
+            *[item(name, set_camera(index, name), radio=True,
+                   checked=lambda i, index=index: engine.args.source == str(index))
+              for index, name in cameras],
+            menu.SEPARATOR,
+            item("Разрешение", menu(size_items)),
+            item("Кадров в секунду", menu(*[
+                item(name, set_fps(limit), radio=True, checked=lambda i, limit=limit: engine.fps_limit == limit)
+                for limit, name in FPS_LIMITS.items()])),
+            item(fps_text, None, enabled=False))),
         menu.SEPARATOR,
         item("Калибровка взгляда…", calibrate),
         item("Быстрая подстройка (Ctrl+Alt+C)", quick),
@@ -318,6 +380,8 @@ def run_tray(args):
         item("Выход", quit_app),
     )
     icon.run_detached()
+    if args.source.isdigit():
+        learn_modes(int(args.source))
 
     def prepare():
         if not models_ready():
@@ -335,6 +399,7 @@ def run_tray(args):
     threading.Thread(target=prepare, daemon=True).start()
     viewer = Viewer(engine)
     shown = None
+    fps_shown, fps_at = None, 0.0  # строка «Сейчас: … к/с» в меню камеры — меню перестраивается при её смене
     overlay = None  # окно меню взглядом (tkinter; живёт в этом, главном, потоке)
     dot = None  # точка взгляда поверх экрана
     try:
@@ -411,6 +476,12 @@ def run_tray(args):
             else:
                 viewer.close()
                 time.sleep(0.03 if menu["open"] or ui["dot"] else 0.2)  # меню или точка — плавно
+            # не чаще раза в 15 с: pystray пересоздаёт меню целиком, открытое в этот момент закроется
+            if time.monotonic() - fps_at > 15.0:
+                fps_at = time.monotonic()
+                if fps_text() != fps_shown:
+                    fps_shown = fps_text()
+                    icon.update_menu()
             color, text = status_of(engine)
             if (color, text) != shown:
                 shown = (color, text)

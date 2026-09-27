@@ -16,6 +16,10 @@ SETTLE, COLLECT = 0.9, 1.3  # секунд: перевести взгляд, п�
 HEAD_MOVE = 5.0  # секунд смотреть в точку, покачивая головой
 MIN_SAMPLES = 8
 MAX_GOOD_CM = 4.0  # хуже на точках проверки — калибровку не сохраняем
+HEAD_POINT = (0.2, 0.25)  # вторая точка «качать головой», доли экрана
+# белые полосы по бокам (доли ширины): экран подсвечивает лицо — в темноте на тёмном экране камера
+# лица почти не видит. Стоят между метками у рамки (до 58 px от края) и точкой «качать головой»
+LIGHT_STRIPES = ((0.066, 0.146), (0.854, 0.934))
 
 
 def primary_monitor():
@@ -64,6 +68,11 @@ def pose_hint(eye):
     return True, "Положение хорошее"
 
 
+def light_stripes(width):
+    """Полосы подсветки в пикселях: [(x0, x1)]."""
+    return [(round(a * width), round(b * width)) for a, b in LIGHT_STRIPES]
+
+
 class Screen:
     def __init__(self, monitor):
         self.left, self.top, self.w, self.h = monitor
@@ -73,7 +82,10 @@ class Screen:
         cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
     def canvas(self):
-        return np.full((self.h, self.w, 3), 24, np.uint8)
+        img = np.full((self.h, self.w, 3), 24, np.uint8)
+        for x0, x1 in light_stripes(self.w):
+            img[:, x0:x1] = 255
+        return img
 
     def text(self, img, lines, y=None, color=(235, 235, 235)):
         y = y if y is not None else self.h // 3
@@ -119,7 +131,7 @@ def run_calibration(engine):
     checks = check_points(w, h)
     center = points[0]
     five = [center] + edge_points(w, h)  # ближе и дальше — тоже до самых углов
-    heads = [center, (round(0.2 * w), round(0.25 * h))]
+    heads = [center, (round(HEAD_POINT[0] * w), round(HEAD_POINT[1] * h))]
     try:
         while True:
             lead = {"left": "левым", "right": "правым"}.get(getattr(engine, "lead", "both"))
@@ -134,6 +146,10 @@ def run_calibration(engine):
             if samples is None:
                 return None
             moving = []
+            if not _prompt(scr, engine, [
+                    "Теперь 2 точки по %d секунд: смотрите на точку и медленно покачайте головой —" % HEAD_MOVE,
+                    "влево-вправо, потом вверх-вниз. Взгляд не отводите от точки."]):
+                return None
             for p in heads:  # смотреть в точку и покачивать головой: глаза поворачиваются навстречу голове
                 got = _collect_point(scr, engine, p, collect=HEAD_MOVE, lines=[
                     "Смотрите на точку и медленно покачайте головой:", "влево-вправо, потом вверх-вниз"])

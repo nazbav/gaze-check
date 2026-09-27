@@ -20,6 +20,26 @@ def test_pose_hint():
     assert calib.pose_hint({"face": True, "valid": True, "marks": [(640, 330)], "frame": frame})[0]
 
 
+def test_light_stripes_clear_of_targets():
+    """Белые полосы подсветки — на каждом экране калибровки и не задевают ни одну метку (радиус до 28 px)."""
+    from gaze_check.eyes import calibration_points, check_points, edge_points
+    for w, h in ((2560, 1600), (1920, 1080), (1366, 768), (3840, 2160)):
+        xs = [p[0] for p in calibration_points(w, h) + edge_points(w, h) + check_points(w, h)]
+        xs.append(round(calib.HEAD_POINT[0] * w))
+        stripes = calib.light_stripes(w)
+        assert len(stripes) == 2
+        for x0, x1 in stripes:
+            assert x1 - x0 >= 0.07 * w
+            for x in xs:
+                assert x + 28 < x0 or x - 28 > x1, (w, x, x0, x1)
+    scr = calib.Screen.__new__(calib.Screen)
+    scr.w, scr.h = 2560, 1600
+    img = scr.canvas()
+    (a0, a1), (b0, b1) = calib.light_stripes(2560)
+    assert (img[:, a0:a1] == 255).all() and (img[:, b0:b1] == 255).all()
+    assert (img[:, 1280] == 24).all()
+
+
 def test_calibration_flow_fits_checks_and_saves(monkeypatch, tmp_path):
     """Экран калибровки без окна: 9 точек → голова → ближе → дальше → проверка → Enter;
     глаза синтетические."""

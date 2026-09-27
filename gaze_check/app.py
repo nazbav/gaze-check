@@ -132,6 +132,9 @@ class Painter:
         y = _put(frame, _patch(text, big, True, fill, white), m, m)
         if snap["gaze_latency"]:
             info = "%d мс на кадр · %s" % (round(snap["gaze_latency"] * 1000), snap["accuracy"] or "без калибровки")
+            if snap.get("camera_fps"):
+                info = "%d к/с%s · " % (round(snap["camera_fps"]), " (мало света)" if snap["camera_fps"] < LOW_FPS
+                                         else "") + info
             if eye.get("dist"):
                 info += " · до лица ~%d см" % eye["dist"]
             if eye.get("method"):
@@ -181,6 +184,8 @@ class State:
         self.phone_ready = False
         self.phone_error = ""
         self.camera_error = ""
+        self.camera_fps = 0.0  # сколько новых кадров в секунду на деле даёт камера
+        self.camera_size = None  # (ширина, высота) кадра
         self.notice = ""  # пауза, загрузка моделей — показывается вместо кадра
         self.eye = {}  # трекер глаз: valid, точки глаз на кадре, точка взгляда на экране
         self.eye_error = ""
@@ -320,20 +325,58 @@ class Latest:
             return None
 
 
-def open_source(source, size):
-    """Камера (номер) или файл; None, если не открылся."""
+CAMERA_SIZE = "1920x1080"  # разрешение по умолчанию: сеть смотрит на глаз 112×112 — в 1080p он такой и есть
+CAMERA_FPS = 30  # какой частоты режим просить у камеры
+LOW_FPS = 18  # меньше — камере не хватает света (подсказка в меню)
+
+
+def open_source(source, size, fps=CAMERA_FPS):
+    """Камера (номер) или файл; None, если не открылся. У камеры просим режим с частотой fps: сколько
+    кадров она на деле даст, решает её автоэкспозиция — в темноте выдержка длиннее и кадров меньше
+    (замер: темно — 10 к/с, свет в комнате — 22; ручная выдержка даёт чёрный кадр). Media Foundation
+    вместо DirectShow новых кадров не прибавляет — только повторяет старые до 30."""
     cap = cv2.VideoCapture(int(source), cv2.CAP_DSHOW) if source.isdigit() else cv2.VideoCapture(source)
-    if source.isdigit() and size:
-        w, h = (int(v) for v in size.lower().split("x"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+    if source.isdigit():
+        if size:
+            w, h = (int(v) for v in size.lower().split("x"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+        cap.set(cv2.CAP_PROP_FPS, fps)
     if not cap.isOpened():
         cap.release()
         return None
     return cap
 
 
-MEDIAN_FRAMES, MEDIAN_S = 5, 0.5  # точка взгляда — медиана стольких последних кадров, не старше
+class FrameGate:
+    """Кадры камеры → только новые и не чаще предела: повтор прежнего кадра (так делают некоторые
+    камеры и драйверы, чтобы держать частоту) сбил бы длительность моргания; предел — чтобы
+    поберечь процессор. Заодно считает, сколько новых кадров в секунду на деле."""
+
+    def __init__(self, limit=0):
+        self.limit = limit  # кадров в секунду, 0 — сколько даёт камера
+        self.prev, self.kept_at, self.fps, self.new_at = None, None, 0.0, None
+
+    def __call__(self, frame, ts):
+        probe = frame[::37, ::41]  # новый кадр всегда отличается шумом матрицы
+        if self.prev is not None and probe.shape == self.prev.shape and np.array_equal(probe, self.prev):
+            return False
+        self.prev = probe.copy()
+        if self.new_at is not None:
+            dt = max(1e-3, ts - self.new_at)
+            self.fps = 1.0 / dt if not self.fps else 0.9 * self.fps + 0.1 / dt
+        self.new_at = ts
+        if self.limit and self.kept_at is not None and ts - self.kept_at < 0.9 / self.limit:
+            return False
+        self.kept_at = ts
+        return True
+
+
+MEDIAN_FRAMES = 30  # не больше стольких кадров в медиане (камеры до 60 к/с)
+# точка взгляда — медиана кадров за последние MEDIAN_S секунд: при 10 к/с — 4 кадра, при 30 — 10.
+# Замер (5 точек; 10 и ~15 новых кадров в секунду): окно 0,3 с против 5 кадров — дрожание 0,38 см
+# против 0,48 при ~15 к/с; при 10 к/с почти как было (0,67 против 0,63), а окно короче (было 0,5 с)
+MEDIAN_S = 0.3
 
 
 class Engine:
@@ -348,7 +391,9 @@ class Engine:
         self.is_file = not args.source.isdigit()
         self.state, self.latest = State(), Latest()
         self.stop, self.paused = threading.Event(), threading.Event()
-        self.reopen = threading.Event()  # сменили камеру — поток чтения переоткроет
+        self.reopen = threading.Event()  # сменили камеру или разрешение — поток чтения переоткроет
+        self.fps_limit = int(getattr(args, "fps", None) or 0)  # предел кадров в секунду, 0 — сколько даёт камера
+        self.gate = None  # FrameGate открытой камеры
         self.phone_on = not args.no_phone
         self.clicks_on = not args.no_clicks and not self.is_file
         self.away_after = args.away_after
@@ -794,8 +839,23 @@ class Engine:
         self.reopen.set()
         return True
 
+    def set_size(self, size):
+        """Сменить разрешение камеры на ходу ("1920x1080"). → сменилось ли."""
+        if self.is_file or size == self.args.size:
+            return False
+        self.args.size = size
+        self.reopen.set()
+        return True
+
+    def set_fps(self, limit):
+        """Предел кадров в секунду (0 — сколько даёт камера); действует сразу."""
+        self.fps_limit = int(limit)
+        gate = self.gate
+        if gate is not None:
+            gate.limit = self.fps_limit
+
     def _read_loop(self):
-        cap, period, nxt = None, 0.0, 0.0
+        cap, period, nxt, shown_at = None, 0.0, 0.0, 0.0
         while not self.stop.is_set():
             if self.reopen.is_set():
                 self.reopen.clear()
@@ -812,7 +872,7 @@ class Engine:
                 self.stop.wait(0.2)
                 continue
             if cap is None:
-                cap = open_source(self.args.source, self.args.size)
+                cap = open_source(self.args.source, self.args.size or CAMERA_SIZE)
                 if cap is None:
                     if self.is_file:
                         self.state.set(camera_error="Не открыть файл: %s" % self.args.source)
@@ -821,9 +881,10 @@ class Engine:
                                    % self.args.source)
                     self.stop.wait(3)
                     continue
-                self.state.set(camera_error="", notice="")
+                self.state.set(camera_error="", notice="", camera_fps=0.0, camera_size=None)
                 period = 1.0 / (cap.get(cv2.CAP_PROP_FPS) or 25) if self.is_file else 0.0
                 nxt = time.monotonic()
+                self.gate = None if self.is_file else FrameGate(self.fps_limit)
             ok, frame = cap.read()
             if not ok:
                 if self.is_file:
@@ -832,6 +893,15 @@ class Engine:
                 cap = None
                 self.stop.wait(1)
                 continue
+            gate = self.gate
+            if gate is not None:
+                now = time.monotonic()
+                keep = gate(frame, now)
+                if now - shown_at >= 1.0:
+                    shown_at = now
+                    self.state.set(camera_fps=round(gate.fps, 1), camera_size=(frame.shape[1], frame.shape[0]))
+                if not keep:
+                    continue
             self.latest.put(frame)
             if period:  # файл проигрываем в реальном времени, как живой поток
                 nxt += period
@@ -1097,7 +1167,10 @@ def _main(argv=None):
     ap.add_argument("--source", default=None,
                     help="номер камеры, видеофайл или картинка (по умолчанию — из настроек, иначе 0)")
     ap.add_argument("--window", action="store_true", help="сразу окно вместо значка в трее")
-    ap.add_argument("--size", default="1920x1080", help="разрешение камеры (больше — точнее зрачок)")
+    ap.add_argument("--size", default=None,
+                    help="разрешение камеры, например 1280x720 (по умолчанию — из настроек, иначе 1920x1080)")
+    ap.add_argument("--fps", type=int, default=None,
+                    help="не больше стольких кадров в секунду (по умолчанию — сколько даёт камера, до 30)")
     ap.add_argument("--away-after", type=float, default=None,
                     help="через сколько секунд без взгляда в экран пищать (по умолчанию 60)")
     ap.add_argument("--phone-confidence", type=float, default=0.3)

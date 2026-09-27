@@ -45,5 +45,8 @@ def test_tray_menu_builds(monkeypatch, show_dot):
         item.checked  # noqa: B018 — ради вызова лямбды
     assert "Показывать точку взгляда" in texts and "Лёгкий журнал взгляда (без видео)" in texts
     assert "Проигрыватель журнала взгляда" in texts
+    assert "Разрешение" in texts and "Кадров в секунду" in texts
+    assert any(t.startswith("Сейчас:") for t in texts)
+    assert "Сколько даёт камера (до 30)" in texts
     dot = next(i for i in items if i.text == "Показывать точку взгляда")
     assert dot.checked is show_dot

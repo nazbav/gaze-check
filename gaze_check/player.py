@@ -76,6 +76,15 @@ def _clock(s):
     return "%d:%02d:%02d" % (s // 3600, s // 60 % 60, s % 60) if s >= 3600 else "%d:%02d" % (s // 60, s % 60)
 
 
+def _fit(text, font, px):
+    """Текст, обрезанный многоточием под ширину px."""
+    if font.measure(text) <= px:
+        return text
+    while text and font.measure(text + "…") > px:
+        text = text[:-1]
+    return text + "…"
+
+
 class Player:
 
     def __init__(self, path):
@@ -99,8 +108,15 @@ class Player:
         left.pack(side="left", fill="y")
         self.face = tk.Canvas(left, width=self.FACE, height=self.FACE, bg="#15191e", highlightthickness=0)
         self.face.pack()
-        self.info = tk.Label(left, justify="left", anchor="w", bg="#15191e", fg="#dfe5ec", font=("Segoe UI", 10))
-        self.info.pack(fill="x", pady=8)
+        # подпись постоянного размера: длинное название программы раздвигало колонку, и экран скакал
+        import tkinter.font as tkfont
+        self.info_font = tkfont.Font(self.root, family="Segoe UI", size=10)
+        box = tk.Frame(left, width=self.FACE, height=self.info_font.metrics("linespace") * 5 + 4, bg="#15191e")
+        box.pack_propagate(False)
+        box.pack(pady=8)
+        self.info = tk.Label(box, justify="left", anchor="nw", bg="#15191e", fg="#dfe5ec", font=self.info_font,
+                             wraplength=self.FACE)
+        self.info.pack(fill="both", expand=True)
         self.W = int(620 * k)
         self.H = int(self.W * self.sh / max(1, self.sw))
         self.scr = tk.Canvas(top, width=self.W, height=self.H, bg="#0c0f12", highlightthickness=1,
@@ -121,7 +137,7 @@ class Player:
         self.scale = ttk.Scale(bar, from_=0, to=max(0.1, self.model.duration), orient="horizontal",
                                command=self.seek)
         self.scale.pack(side="left", fill="x", expand=True, padx=8)
-        self.time_lbl = tk.Label(bar, bg="#15191e", fg="#dfe5ec", font=("Consolas", 10))
+        self.time_lbl = tk.Label(bar, bg="#15191e", fg="#dfe5ec", font=("Consolas", 10), width=17, anchor="e")
         self.time_lbl.pack(side="left")
         ttk.Button(bar, text="CSV", command=self.export).pack(side="left", padx=(8, 0))
         s = summary(self.model.log)
@@ -206,7 +222,7 @@ class Player:
         self.info.configure(text="Морганий: %d (%.0f в минуту)\nДо экрана: %s\n%s\nЗона: %s\n%s" % (
             st["blinks"], st["blinks_per_min"], ("%d см" % st["dist"]) if st["dist"] else "—",
             "смотрит в экран" if st["looking"] else "не смотрит в экран", st["zone"] or "—",
-            (st["app"] or "")[:40]))
+            _fit(st["app"] or "", self.info_font, self.FACE)))
 
     def _face(self, st):
         """Лицо как в зеркале: зрачки сдвинуты в ту сторону экрана, куда смотрел; моргнул — глаза чертой."""
