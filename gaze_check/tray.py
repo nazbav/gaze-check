@@ -311,7 +311,7 @@ def run_tray(args):
         items = [item(title(c), choose(c.meta["id"]), radio=True,
                       checked=lambda i, cid=c.meta["id"]: engine.calibration.meta.get("id") == cid) for c in cams]
         return (items or [item("Для этой камеры калибровок нет", None, enabled=False)]) + [
-            menu.SEPARATOR,
+            pystray.Menu.SEPARATOR,
             item("Выбирать по свету сам", toggle_light_auto, checked=lambda i: engine.light_auto)]
 
     def quick(_icon, _item):
@@ -438,13 +438,13 @@ def run_tray(args):
                 except Exception:
                     traceback.print_exc()  # точка не должна ронять программу
                     ui["dot"], dot = False, None
-            menu = engine.menu.snapshot()
-            if menu["open"] or overlay is not None:
+            gaze_menu = engine.menu.snapshot()  # не «menu»: так зовётся pystray.Menu, его читают пункты меню
+            if gaze_menu["open"] or overlay is not None:
                 try:
                     if overlay is None:
                         from .menu import Overlay
                         overlay = Overlay(engine.calibration.screen)
-                    overlay.tick(menu)
+                    overlay.tick(gaze_menu)
                 except Exception:
                     traceback.print_exc()  # меню не должно ронять программу
                     engine.menu.open = False
@@ -498,7 +498,7 @@ def run_tray(args):
                     icon.update_menu()
             else:
                 viewer.close()
-                time.sleep(0.03 if menu["open"] or ui["dot"] else 0.2)  # меню или точка — плавно
+                time.sleep(0.03 if gaze_menu["open"] or ui["dot"] else 0.2)  # меню или точка — плавно
             # не чаще раза в 15 с: pystray пересоздаёт меню целиком, открытое в этот момент закроется
             if time.monotonic() - fps_at > 15.0:
                 fps_at = time.monotonic()
