@@ -370,6 +370,7 @@ class Calibration:
         self.click_errors = click_errors or []  # промах предсказания на последних кликах, px
         self.netmap = None  # MGazeNet → экран; строится из тех же данных
         self.lead = lead  # ведущий глаз, по которому посчитаны gy/gp в хранимых кадрах
+        self.meta = {}  # в наборе калибровок (calstore.py): id, камера, свет, когда выбрана
 
     def relead(self, lead):
         """Та же калибровка по другому ведущему глазу: углы в хранимых кадрах пересчитываются
@@ -385,7 +386,7 @@ class Calibration:
             return out
         cal = Calibration.fit(self.screen, redo(self.points), self.size_mm, clicks=redo(self.clicks),
                               moving=redo(self.moving))
-        cal.created, cal.click_errors, cal.lead = self.created, self.click_errors, lead
+        cal.created, cal.click_errors, cal.lead, cal.meta = self.created, self.click_errors, lead, self.meta
         checks = {}
         for p, f in redo(self.checks):
             checks.setdefault(tuple(p), []).append(f)
@@ -472,9 +473,11 @@ class Calibration:
         clicks = (self.clicks + [(tuple(point), _pack(feat))])[-MAX_CLICKS:]
         theta = _fit(*self._data(self.points, self.moving, clicks), self.screen, self.size_mm,
                      start=self.theta, iters=10, robust=1)
-        return Calibration(self.screen, self.size_mm, theta, self.error_px, self.created, self.points, clicks,
-                           (self.click_errors + [err])[-50:], self.check_px, self.moving, self.checks,
-                           self.lead)._fit_net()
+        cal = Calibration(self.screen, self.size_mm, theta, self.error_px, self.created, self.points, clicks,
+                          (self.click_errors + [err])[-50:], self.check_px, self.moving, self.checks,
+                          self.lead)._fit_net()
+        cal.jitter_px, cal.meta = self.jitter_px, self.meta
+        return cal
 
     @property
     def click_error_px(self):
@@ -512,7 +515,7 @@ class Calibration:
                 "click_error_px": self.click_error_px,
                 "created": self.created, "lead": self.lead, "points": pairs(self.points), "moving": pairs(self.moving),
                 "checks": pairs(self.checks), "clicks": pairs(self.clicks),
-                "click_errors": [round(e, 1) for e in self.click_errors]}
+                "click_errors": [round(e, 1) for e in self.click_errors], "meta": self.meta}
 
     def save(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -534,6 +537,7 @@ class Calibration:
                        d.get("created"), pairs("points"), pairs("clicks"), d.get("click_errors", []),
                        d.get("check_px"), pairs("moving"), pairs("checks"), d.get("lead", "both"))._fit_net()
             cal.jitter_px = d.get("jitter_px")
+            cal.meta = d.get("meta") or {}
             if cal.jitter_px is None and cal.checks:  # калибровка до замера дрожания — досчитать
                 groups = {}
                 for p, f in cal.checks:
