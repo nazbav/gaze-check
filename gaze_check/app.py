@@ -14,8 +14,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .workflow import (GAZE_CLASSES, PROLONGED_AFTER, GazeTimer, Hold, person_seen, phone_outputs, presence,
-                       top_class)
+from .workflow import GAZE_CLASSES, PROLONGED_AFTER, GazeTimer, presence, top_class
 
 TITLE = "Gaze Check"
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -95,14 +94,7 @@ class Painter:
         m = big // 2
         white, black = (255, 255, 255), (0, 0, 0)
 
-        ph = snap["phone"]
-        for p in ph.get("phone_predictions", []):
-            x1, y1 = int(p["x"] - p["width"] / 2), int(p["y"] - p["height"] / 2)
-            x2, y2 = int(p["x"] + p["width"] / 2), int(p["y"] + p["height"] / 2)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), YELLOW[::-1], 3)
-            label = _patch("телефон %d%%" % round(p["confidence"] * 100), small, False, YELLOW, black)
-            _put(frame, label, x1, y1 - 2, bottom=True)
-        if snap["status"].get("prolonged_away") or ph.get("phone_alarm", ph.get("phone_present")):
+        if snap["status"].get("prolonged_away"):
             cv2.rectangle(frame, (0, 0), (w - 1, h - 1), RED[::-1], max(6, h // 60))
         eye = snap.get("eye") or {}
         draw_trace(frame, eye)
@@ -154,17 +146,6 @@ class Painter:
                 "no_person": ("Никого нет — не пищу", GRAY),
             }[st["status"]]
             _put(frame, _patch(text, big, True, fill, white), m, h - m, bottom=True)
-
-        # справа сверху — телефон
-        if snap["phone_error"]:
-            text, fill, color = "Телефон: ошибка, см. консоль", RED, white
-        elif not snap["phone_ready"]:
-            text, fill, color = "Телефон: загрузка модели…", GRAY, white
-        elif ph.get("phone_alarm", ph.get("phone_present")):
-            text, fill, color = "Телефон в кадре — убери!", YELLOW, black
-        else:
-            text, fill, color = "Телефона нет", black, YELLOW
-        _put(frame, _patch(text, big, True, fill, color), w - m, m, right=True)
         return frame
 
 
@@ -180,16 +161,12 @@ class State:
         self.gaze_ready = ""
         self.gaze_error = ""
         self.status = {}
-        self.phone = {}
-        self.phone_ready = False
-        self.phone_error = ""
         self.camera_error = ""
         self.camera_fps = 0.0  # сколько новых кадров в секунду на деле даёт камера
         self.camera_size = None  # (ширина, высота) кадра
         self.notice = ""  # пауза, загрузка моделей — показывается вместо кадра
         self.eye = {}  # трекер глаз: valid, точки глаз на кадре, точка взгляда на экране
         self.eye_error = ""
-        self.person_at = None  # monotonic: когда RF-DETR последний раз видел человека
         self.face_at = None  # monotonic: когда MediaPipe последний раз видел лицо
         self.recording = ""  # папка текущей записи
         self.mouse = False  # мышь ведёт взгляд
@@ -247,7 +224,6 @@ class Journal:
         self.sound = sound
         self.notify = notify
         self.last_status = None
-        self.last_phone = False
         self.active = {}
 
     def _say(self, text):
@@ -276,21 +252,12 @@ class Journal:
         self._alarm("away", st["prolonged_away"],
                     "Не смотришь в экран уже %s" % human_seconds(away_after), 700)
         if self.file:
-            ph = snap["phone"]
             rec = {"time": datetime.datetime.now().isoformat(timespec="milliseconds"),
                    "predictions": snap["gaze"], "gaze_status": st["status"],
                    "away_seconds": st["away_seconds"], "prolonged_away": st["prolonged_away"],
-                   "phone_predictions": ph.get("phone_predictions", []),
-                   "phone_count": ph.get("phone_count", 0), "phone_present": ph.get("phone_present", False),
                    "point": (snap["eye"] or {}).get("point")}
             self.file.write(json.dumps(rec, ensure_ascii=False) + "\n")
             self.file.flush()
-
-    def phone(self, alarm):
-        if alarm != self.last_phone:
-            self._say("телефон в кадре" if alarm else "телефон убран")
-            self.last_phone = alarm
-        self._alarm("phone", alarm, "Телефон в кадре — убери!", 1200)
 
 
 # ---------- источник и фоновые модели ----------
@@ -388,7 +355,7 @@ MEDIAN_S = 0.3
 
 
 class Engine:
-    """Камера, глаза и детектор телефона в фоновых потоках; пауза отпускает камеру."""
+    """Камера и глаза в фоновых потоках; пауза отпускает камеру."""
 
     STATUS_EVERY = 0.2  # с: как часто обновлять статус, журнал и тревогу (глаза — каждый кадр)
     SAVE_EVERY = 20.0  # с: подстроенную по кликам калибровку сохранять не чаще
@@ -402,7 +369,6 @@ class Engine:
         self.reopen = threading.Event()  # сменили камеру или разрешение — поток чтения переоткроет
         self.fps_limit = int(getattr(args, "fps", None) or 0)  # предел кадров в секунду, 0 — сколько даёт камера
         self.gate = None  # FrameGate открытой камеры
-        self.phone_on = not args.no_phone
         self.clicks_on = not args.no_clicks and not self.is_file
         self.away_after = args.away_after
         self.epoch = 0  # растёт на паузе — таймер взгляда начинает заново
@@ -455,8 +421,7 @@ class Engine:
         self._show_accuracy()
 
     def start(self):
-        self.threads = [threading.Thread(target=self._phone_loop, daemon=True),
-                        threading.Thread(target=self._eye_loop, daemon=True)]
+        self.threads = [threading.Thread(target=self._eye_loop, daemon=True)]
         for t in self.threads:
             t.start()
         if not self.is_file:
@@ -475,7 +440,7 @@ class Engine:
 
     def models_loaded(self):
         s = self.state.snapshot()
-        return bool((s["gaze_ready"] or s["gaze_error"]) and (s["phone_ready"] or s["phone_error"]))
+        return bool(s["gaze_ready"] or s["gaze_error"])
 
     def workers_alive(self):
         return any(t.is_alive() for t in self.threads[1:])
@@ -484,7 +449,7 @@ class Engine:
         if on:
             self.paused.set()
             self.epoch += 1
-            self.state.set(status={}, phone={}, gaze=None)
+            self.state.set(status={}, gaze=None)
         else:
             self.paused.clear()
 
@@ -506,11 +471,12 @@ class Engine:
         self._save_calibration()
 
     def present(self, now=None):
-        """Человек в кадре. Пока оба детектора не готовы — считаем, что есть (как раньше)."""
+        """Человек рядом — лицо было в кадре не дольше минуты назад. Пока трекер глаз не заработал —
+        считаем, что есть."""
         s = self.state.snapshot()
-        if not s["phone_ready"] and (s["eye_error"] or not s["eye"]):
+        if s["eye_error"] or not s["eye"]:
             return True
-        return presence(time.monotonic() if now is None else now, s["person_at"], s["face_at"])
+        return presence(time.monotonic() if now is None else now, s["face_at"])
 
     def set_calibration(self, cal, since=None, quick=False):
         """Новая калибровка по точкам (клики, накопленные раньше, калибровка уже учла) → в набор.
@@ -784,7 +750,7 @@ class Engine:
 
     def _log_frame(self, log, ts, feat, point, eye, label, events):
         """Кадр → журнал: события морганий каждый кадр, отсчёт — 10 раз в секунду."""
-        from .gazelog import BLINK, BOTH_EYES, CLOSED, DOUBLE, FACE, LOOKING, PHONE, RIGHT, TRIPLE
+        from .gazelog import BLINK, BOTH_EYES, CLOSED, DOUBLE, FACE, LOOKING, RIGHT, TRIPLE
         from .zones import ALL_ZONES, GRID_ZONES, zone_of
         for ev in events:
             if ev == "closed":
@@ -800,7 +766,6 @@ class Engine:
         s = self.state.snapshot()
         flags = ((FACE if eye["face"] else 0) | (BOTH_EYES if feat and feat.get("eyes") == "both" else 0)
                  | (LOOKING if label == "looking at screen" else 0)
-                 | (PHONE if s["phone"].get("phone_alarm") else 0)
                  | (CLOSED if self.gestures.closed_at is not None else 0))
         scr = self.calibration.screen
         name = zone_of(point, scr[2], scr[3])
@@ -972,7 +937,7 @@ class Engine:
                 s = self.state.snapshot()
                 rec.camera_frame(frame, ts, draw_trace(frame.copy(), eye))
                 rec.gaze(ts, feat, raw, point, s["status"].get("status", ""),
-                         phone=s["phone"].get("phone_alarm", False), dist=eye["dist"], method=eye["method"])
+                         dist=eye["dist"], method=eye["method"])
 
     def set_camera(self, source):
         """Сменить камеру на ходу (номер DirectShow, см. cameras.py). → сменилась ли."""
@@ -1065,32 +1030,6 @@ class Engine:
             seq = item[1]
             yield item
 
-    def _phone_loop(self):
-        """EfficientDet-Lite0 (MediaPipe, процессор): телефон в кадре и есть ли вообще человек."""
-        from .detector import Detector
-        from .models import DETECTOR_MODEL, to_rgb
-        try:
-            model = Detector(DETECTOR_MODEL, confidence=self.args.phone_confidence)
-        except Exception as e:
-            traceback.print_exc()
-            self.state.set(phone_error=str(e))
-            return
-        self.state.set(phone_ready=True)
-        hold = Hold()
-        for frame, _, _ in self._frames():
-            t0 = time.monotonic()
-            dets = model.detect(to_rgb(frame))
-            if person_seen(dets):
-                self.state.set(person_at=t0)
-            out = phone_outputs(dets) if self.phone_on else {}
-            out["phone_alarm"] = (hold.update(out.get("phone_present", False), t0)
-                                  and self.phone_on and self.present(t0))
-            self.state.set(phone=out)
-            self.journal.phone(out["phone_alarm"])
-            # чаще не нужно: телефон и человек не исчезают за полсекунды, а процессор нужен глазам
-            if self.args.phone_fps > 0:
-                self.stop.wait(max(0.0, 1.0 / self.args.phone_fps - (time.monotonic() - t0)))
-
 
 def placeholder(snap, size=(1280, 720)):
     """Кадр-заглушка, когда камеры нет: пауза, загрузка, ошибка."""
@@ -1106,17 +1045,14 @@ def placeholder(snap, size=(1280, 720)):
 
 def run_image(args):
     """Одна картинка: JSON (поля как у журнала) и размеченный кадр."""
-    from .detector import Detector
     from .eyes import Calibration, EyeTracker, ScreenGaze
-    from .models import CALIBRATION, DETECTOR_MODEL, EYE_MODEL, GAZENET_MODEL, to_rgb
+    from .models import CALIBRATION, EYE_MODEL, GAZENET_MODEL, to_rgb
     bgr = cv2.imdecode(np.fromfile(args.source, np.uint8), cv2.IMREAD_COLOR)
     if bgr is None:
         sys.exit("Не прочитать картинку: %s" % args.source)
     rgb = to_rgb(bgr)
     state = State()
     t0 = time.perf_counter()
-    dets = Detector(DETECTOR_MODEL, confidence=args.phone_confidence).detect(rgb)
-    state.phone, state.phone_ready = phone_outputs(dets), True
     feat, pts, rays = EyeTracker(EYE_MODEL, GAZENET_MODEL).process(rgb, 0.0)
     from .calib import primary_monitor, screen_mm
     screen = primary_monitor()
@@ -1131,16 +1067,13 @@ def run_image(args):
                   "predictions": [{"class": c, "class_id": i, "confidence": share if c == label else 0.0}
                                   for i, c in enumerate(GAZE_CLASSES)]}
     state.gaze_latency, state.gaze_done, state.gaze_ready = time.perf_counter() - t0, 1, "MediaPipe"
-    state.status = GazeTimer().update(label, 0.0, present=pts is not None or person_seen(dets))
+    state.status = GazeTimer().update(label, 0.0, present=pts is not None)
     state.eye = {"marks": pts[[33, 133, 362, 263, 468, 473]].tolist() if pts is not None else [], "rays": rays}
     snap = state.snapshot()
     result = json.dumps({"predictions": snap["gaze"], "gaze_status": snap["status"]["status"],
                          "away_seconds": snap["status"]["away_seconds"],
                          "prolonged_away": snap["status"]["prolonged_away"],
-                         "phone_predictions": snap["phone"]["phone_predictions"],
-                         "phone_count": snap["phone"]["phone_count"],
-                         "phone_present": snap["phone"]["phone_present"],
-                         "person": person_seen(dets), "face": pts is not None,
+                         "face": pts is not None,
                          "net": feat is not None and feat.get("net") is not None,
                          "point": None if point is None else [round(point[0]), round(point[1])],
                          "eye": None if feat is None else {k: round(v, 4) for k, v in feat.items()
@@ -1264,7 +1197,7 @@ def run_window(args):
             overlay.close()
         engine.close()
     snap = engine.state.snapshot()
-    for err in (snap["camera_error"], snap["gaze_error"], snap["phone_error"]):
+    for err in (snap["camera_error"], snap["gaze_error"]):
         if err:
             print("Ошибка:", err, flush=True)
 
@@ -1321,10 +1254,6 @@ def _main(argv=None):
                     help="не больше стольких кадров в секунду (по умолчанию — сколько даёт камера, до 30)")
     ap.add_argument("--away-after", type=float, default=None,
                     help="через сколько секунд без взгляда в экран пищать (по умолчанию 60)")
-    ap.add_argument("--phone-confidence", type=float, default=0.3)
-    ap.add_argument("--phone-fps", type=float, default=2,
-                    help="сколько раз в секунду искать телефон и человека (0 — каждый кадр)")
-    ap.add_argument("--no-phone", action="store_true", help="не пищать при телефоне в кадре")
     ap.add_argument("--no-clicks", action="store_true", help="не подстраивать калибровку по кликам мыши")
     ap.add_argument("--menu-gestures", action="store_true",
                     help="три моргания или глаза закрыты 3–5 с — открыть меню взглядом")

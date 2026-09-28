@@ -1,5 +1,5 @@
 """Пути к моделям и данным. Модели маленькие и едут вместе с программой, ничего не качается:
-MediaPipe Face Landmarker (глаза, ~4 МБ) и EfficientDet-Lite0 на COCO (телефон и человек, ~14 МБ)."""
+MediaPipe Face Landmarker (глаза, ~4 МБ) и MGazeNet (взгляд). Детектор телефона и человека убран 28.09."""
 import os
 import sys
 from pathlib import Path
@@ -21,7 +21,6 @@ def _models_dir():
 
 
 MODELS_DIR = _models_dir()
-DETECTOR_MODEL = MODELS_DIR / "efficientdet_lite0.tflite"
 EYE_MODEL = MODELS_DIR / "face_landmarker.task"
 GAZENET_MODEL = MODELS_DIR / "mgazenet.mnn"  # из GazeFollower, CC BY-NC-SA 4.0
 CALIBRATION = DATA_DIR / "calibration.json"  # прежняя одна калибровка — переезжает в набор (calstore.py)
@@ -31,8 +30,6 @@ GAZEFOLLOWER_COMMIT = "13806edabefe76fc6b964c4c5bdcd62846c1ac1d"
 MODEL_URLS = {
     EYE_MODEL.name: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/"
                     "float16/latest/face_landmarker.task",
-    DETECTOR_MODEL.name: "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/"
-                         "float32/latest/efficientdet_lite0.tflite",
     # MGazeNet из GazeFollower (base.mnn), закреплён на коммите — веса CC BY-NC-SA 4.0
     GAZENET_MODEL.name: "https://github.com/GanchengZhu/GazeFollower/raw/%s/"
                         "gazefollower/res/model_weights/base.mnn" % GAZEFOLLOWER_COMMIT,
@@ -42,7 +39,7 @@ MODEL_URLS = {
 
 
 def models_ready():
-    return DETECTOR_MODEL.exists() and EYE_MODEL.exists()
+    return EYE_MODEL.exists()
 
 
 def to_rgb(bgr):

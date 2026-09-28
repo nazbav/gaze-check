@@ -1,9 +1,8 @@
 """Логика проверки взгляда без моделей: метки взгляда, счёт времени без взгляда в экран
-(как блок Gaze_Duration_Status из Roboflow-workflow), фильтр «cell phone» и присутствие человека.
+(как блок Gaze_Duration_Status из Roboflow-workflow) и присутствие человека (по лицу).
 """
 
 GAZE_CLASSES = ("looking at screen", "looking away", "face not visible")
-PHONE_CLASS = "cell phone"
 PROLONGED_AFTER = 60.0  # секунд без взгляда в экран до prolonged_away (в облаке было 10)
 STALE_AFTER = 8.0  # разрыв между кадрами, после которого серия начинается заново
 
@@ -65,46 +64,10 @@ class GazeTimer:
                 "away_seconds": float(round(elapsed, 1)), "prolonged_away": prolonged}
 
 
-def phone_outputs(detections):
-    """Ветка телефона: detections_filter по «cell phone», счётчик и сообщение."""
-    phones = [d for d in detections if d.get("class") == PHONE_CLASS]
-    return {"phone_predictions": phones, "phone_count": len(phones),
-            "phone_present": len(phones) > 0,
-            "phone_message": "Phone visible - please put it away" if phones else "No phone detected"}
+FACE_GONE_S = 60.0  # лица не видно дольше — человека нет (не пищим)
 
 
-class Hold:
-    """Тревога по телефону без мигания: включается после hits находок подряд
-    и держится ещё hold секунд после последней.
-
-    У порога детектор то находит телефон, то теряет, и без этого предупреждение мигает
-    и пищит заново, а одиночная ложная рамка сразу даёт тревогу. Выходы workflow
-    (phone_present) при этом не меняются.
-    """
-
-    def __init__(self, hold=1.5, hits=2):
-        self.hold = hold
-        self.hits = hits
-        self.streak = 0
-        self.last = None
-
-    def update(self, on, now):
-        self.streak = self.streak + 1 if on else 0
-        if self.streak >= self.hits:
-            self.last = now
-        return self.last is not None and now - self.last <= self.hold
-
-
-PERSON_CLASS = "person"
-PERSON_CONFIDENCE = 0.5
-PRESENCE_HOLD = 3.0  # секунд после последней находки человек ещё считается в кадре
-
-
-def person_seen(detections):
-    return any(d.get("class") == PERSON_CLASS and d.get("confidence", 0) >= PERSON_CONFIDENCE
-               for d in detections)
-
-
-def presence(now, person_at=None, face_at=None, hold=PRESENCE_HOLD):
-    """Есть ли человек: RF-DETR видел person или MediaPipe — лицо не позже hold секунд назад."""
-    return any(t is not None and 0 <= now - t <= hold for t in (person_at, face_at))
+def presence(now, face_at=None, hold=FACE_GONE_S):
+    """Есть ли человек: MediaPipe видел лицо не позже hold секунд назад. Детектор телефона и человека
+    убран (28.09): отвернулся ненадолго — ещё «есть», ушёл — через минуту «никого нет»."""
+    return face_at is not None and 0 <= now - face_at <= hold

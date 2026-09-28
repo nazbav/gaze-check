@@ -17,6 +17,7 @@ def test_image_mode_writes_json(tmp_path, monkeypatch):
     out = tmp_path / "r.json"
     main(["--source", str(PERSON), "--no-window", "--json", str(out), "--save", str(tmp_path / "r.jpg")])
     res = json.loads(out.read_text(encoding="utf-8"))
-    assert res["face"] and res["person"] and res["eye"]["gy"] is not None and res["net"]
+    assert res["face"] and res["eye"]["gy"] is not None and res["net"]
+    assert "person" not in res and "phone_present" not in res  # детектор телефона и человека убран
     assert res["predictions"]["top"] in ("looking at screen", "looking away")
     assert (tmp_path / "r.jpg").exists()

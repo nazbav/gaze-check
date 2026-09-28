@@ -6,13 +6,13 @@ import cv2
 
 def test_mediapipe_cannot_send_and_closes_fast():
     from gaze_check import mp as gmp
-    from gaze_check.detector import Detector
-    from gaze_check.models import DETECTOR_MODEL, to_rgb
+    from gaze_check.eyes import EyeTracker
+    from gaze_check.models import EYE_MODEL, to_rgb
     gmp.mediapipe()
     assert set(gmp._offline()) == {"HttpSendRequestA", "InternetOpenA", "InternetReadFile"}
     rgb = to_rgb(cv2.imread("tests/data/person.jpg"))
     t = time.perf_counter()
-    Detector(DETECTOR_MODEL).detect(rgb)  # создать, найти, закрыть (временный объект)
+    EyeTracker(EYE_MODEL).process(rgb, 0.0)  # создать, найти лицо, закрыть (временный объект)
     assert time.perf_counter() - t < 10  # с отправкой закрытие ждало сеть ~42 с
 
 

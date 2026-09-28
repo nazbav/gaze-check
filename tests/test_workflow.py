@@ -1,4 +1,4 @@
-from gaze_check.workflow import GazeTimer, Hold, person_seen, phone_outputs, presence, top_class
+from gaze_check.workflow import FACE_GONE_S, GazeTimer, presence, top_class
 
 
 def test_timer_counts_away_and_goes_prolonged():
@@ -34,23 +34,6 @@ def test_timer_unknown_label_is_face_not_visible():
     assert r["status"] == "face_not_visible" and r["display_text"] == "Face not visible"
 
 
-def test_phone_filter():
-    dets = [{"class": "person"}, {"class": "cell phone"}, {"class": "cell phone"}]
-    out = phone_outputs(dets)
-    assert out["phone_count"] == 2 and out["phone_present"]
-    assert phone_outputs([{"class": "person"}])["phone_message"] == "No phone detected"
-
-
-def test_hold_needs_two_hits_and_bridges_gaps():
-    h = Hold(hold=1.5, hits=2)
-    assert not h.update(True, 0.0)  # одиночная рамка — ещё не тревога
-    assert not h.update(False, 0.25)
-    assert not h.update(True, 0.5)
-    assert h.update(True, 0.75)
-    assert h.update(False, 1.0) and h.update(False, 2.25)  # пропуски внутри 1.5 с — держится
-    assert not h.update(False, 2.5)
-
-
 def test_timer_default_minute_and_face_counts():
     t = GazeTimer()
     t.update("looking at screen", 0.0)
@@ -82,9 +65,7 @@ def test_no_person_resets_and_never_alarms():
     assert t.update("looking away", 40.0)["away_seconds"] == 0.0  # вернулся — счёт с нуля
 
 
-def test_presence_from_person_or_face():
-    assert not presence(10.0)
-    assert presence(10.0, person_at=8.0) and presence(10.0, face_at=7.5)
-    assert not presence(10.0, person_at=6.0, face_at=6.9)
-    assert person_seen([{"class": "person", "confidence": 0.8}])
-    assert not person_seen([{"class": "person", "confidence": 0.3}, {"class": "cell phone", "confidence": 0.9}])
+def test_presence_from_face_only():
+    assert not presence(10.0)  # лица не было вовсе
+    assert presence(10.0, face_at=7.5) and presence(70.0, face_at=10.0 + 0.5)
+    assert not presence(10.0 + FACE_GONE_S + 1, face_at=10.0)  # лица нет больше минуты — никого нет

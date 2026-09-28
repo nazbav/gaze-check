@@ -137,7 +137,7 @@ class Recorder:
             if traced is not None:
                 self.camera_trace.add(traced, ts - self.t0)
 
-    def gaze(self, ts, feat, raw, smooth, status="", phone=False, dist=None, method=""):
+    def gaze(self, ts, feat, raw, smooth, status="", dist=None, method=""):
         t = ts - self.t0
         zone = zone_of(smooth, self.screen[2], self.screen[3]) if self.screen else NO_DATA
         # окно под взглядом — вне блокировки; WindowProbe сам спрашивает Windows не чаще 10 раз в секунду
@@ -158,7 +158,7 @@ class Recorder:
                     raw[0] if raw is not None else None, raw[1] if raw is not None else None)),
                 int(smooth is not None), fixation or "",
                 *("%.4f" % f[k] if k in f else "" for k in ("hx", "vy", "look_h", "look_v", "yaw", "pitch")),
-                status, int(bool(phone)), zone, app, window, "%.0f" % dist if dist else "", method])
+                status, 0, zone, app, window, "%.0f" % dist if dist else "", method])  # phone: детектор убран
             self.attention.add(t, zone, app, window)
             self.zone, self.app = zone, app
             self.samples += 1

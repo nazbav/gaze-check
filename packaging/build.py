@@ -42,12 +42,12 @@ def make_icon():
 
 
 def pyinstaller(ico):
-    from gaze_check.models import DETECTOR_MODEL, EYE_MODEL, GAZENET_MODEL
+    from gaze_check.models import EYE_MODEL, GAZENET_MODEL
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed",
            "--name", APP, "--icon", ico, "--distpath", DIST, "--workpath", WORK / "pyi",
            "--specpath", WORK, "--additional-hooks-dir", ROOT / "packaging" / "hooks",
            "--hidden-import", "mss", "--collect-all", "MNN"]
-    for model in (EYE_MODEL, DETECTOR_MODEL, GAZENET_MODEL, GAZENET_MODEL.parent / "mgazenet-LICENSE.txt"):
+    for model in (EYE_MODEL, GAZENET_MODEL, GAZENET_MODEL.parent / "mgazenet-LICENSE.txt"):
         cmd += ["--add-data", "%s;models" % model]
     for mod in EXCLUDE:
         cmd += ["--exclude-module", mod]
@@ -65,7 +65,6 @@ def smoke():
                    timeout=300, check=True)  # ошибка → код 1, без окна
     res = json.loads(out.read_text(encoding="utf-8"))
     assert res["face"] and res["eye"], "трекер глаз не отработал"
-    assert res["person"], "детектор не нашёл человека"
     assert res["net"], "MGazeNet не отработал (MNN или модель не попали в сборку)"
     print("smoke: %.1f с от запуска до ответа, взгляд=%s, точка=%s" % (
         time.time() - t, res["predictions"]["top"], res["point"]), flush=True)

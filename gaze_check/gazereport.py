@@ -1,6 +1,6 @@
 """Отчёт по лёгкому журналу взгляда — те же итоги, что у записи сеанса (recorder.py), только без видео:
 фиксации, отрезки внимания, доли по зонам, программам и окнам, тепловая карта, картинка зон, и то, что
-есть только в журнале: моргания, «смотрит в экран», лицо видно, телефон, расстояние до экрана.
+есть только в журнале: моргания, «смотрит в экран», лицо видно, расстояние до экрана.
 Пишется при остановке журнала в папку рядом с ним (то же имя без .gazelog); для старых журналов —
 GazeCheck.exe --report [файл.gazelog]."""
 import csv
@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from .eyes import Fixations
-from .gazelog import BLINK, CLOSED, DOUBLE, FACE, LOOKING, PHONE, RIGHT, TRIPLE, logs_dir, read_log, to_csv
+from .gazelog import BLINK, CLOSED, DOUBLE, FACE, LOOKING, RIGHT, TRIPLE, logs_dir, read_log, to_csv
 from .recorder import ATTENTION_COLUMNS, SCREEN_WIDTH, heatmap
 from .zones import ALL_ZONES, NO_DATA, AttentionLog, summarize, zones_image
 
@@ -96,7 +96,7 @@ def build(path, out=None):
         "samples": len(samples), "gaze_samples": sum(1 for s in samples if s[1] is not None),
         "fixations": len(fixations), "first_fixations": fixations[:10],
         "zones": attention["zones"], "apps": attention["apps"], "windows": attention["windows"],
-        "looking_share": share(LOOKING), "face_share": share(FACE), "phone_share": share(PHONE),
+        "looking_share": share(LOOKING), "face_share": share(FACE),
         "eyes_closed_share": share(CLOSED),
         "blinks": len(blinks), "blinks_per_min": round(len(blinks) * 60 / dur, 1) if dur else 0.0,
         "blink_ms_median": int(np.median(blinks)) if blinks else None,

@@ -17,7 +17,7 @@ from .mouse import JOY_SPEEDS
 
 APP = "GazeCheck"
 SETTINGS = DATA_DIR / "settings.json"
-DEFAULTS = {"away_after": 60, "sound": True, "phone": True, "clicks": True, "lead_eye": "both",
+DEFAULTS = {"away_after": 60, "sound": True, "clicks": True, "lead_eye": "both",
             "menu_gestures": False, "camera": "0", "mouse_mode": "joystick", "joy_speed": 2.0, "show_dot": False,
             "gaze_log": False, "size": CAMERA_SIZE, "fps": 0, "light_auto": True}
 LEAD_NAMES = {"left": "Левый", "right": "Правый", "both": "Оба"}
@@ -94,8 +94,8 @@ def message_box(text):
 def status_of(engine):
     """(цвет, подсказка) для значка."""
     s = engine.state.snapshot()
-    st, ph = s["status"], s["phone"]
-    if s["gaze_error"] or s["phone_error"]:
+    st = s["status"]
+    if s["gaze_error"]:
         return RED, "ошибка — см. журнал"
     if engine.paused.is_set():
         return GRAY, "пауза"
@@ -107,8 +107,6 @@ def status_of(engine):
            + (" · запись" if s["recording"] else "") + (" · журнал" if s["logging"] else "")
            + ("" if engine.journal.sound else " · без звука")
            + (" · " + s["accuracy"] if s["accuracy"] else " · без калибровки"))
-    if ph.get("phone_alarm"):
-        return RED, "телефон в кадре" + rec
     if st.get("prolonged_away"):
         return RED, "не смотришь в экран %d с" % st["away_seconds"] + rec
     if st.get("status") in ("brief_away", "face_not_visible"):
@@ -129,7 +127,6 @@ def run_tray(args):
         args.source = str(settings["camera"])
     if args.away_after is None:
         args.away_after = float(settings["away_after"])
-    args.no_phone = args.no_phone or not settings["phone"]
     args.no_clicks = args.no_clicks or not settings["clicks"]
     args.lead_eye = args.lead_eye or settings["lead_eye"]
     args.mouse_mode = args.mouse_mode or settings["mouse_mode"]
@@ -161,10 +158,6 @@ def run_tray(args):
             engine.away_after = float(sec)
             save(away_after=sec)
         return action
-
-    def toggle_phone(_icon, _item):
-        engine.phone_on = not engine.phone_on
-        save(phone=engine.phone_on)
 
     def toggle_clicks(_icon, _item):
         engine.clicks_on = not engine.clicks_on
@@ -397,7 +390,6 @@ def run_tray(args):
             item(human_seconds(sec), set_away(sec), radio=True,
                  checked=lambda i, sec=sec: engine.away_after == sec)
             for sec in AWAY_CHOICES])),
-        item("Пищать при телефоне в кадре", toggle_phone, checked=lambda i: engine.phone_on),
         item("Запускать вместе с Windows", toggle_autostart, checked=lambda i: autostart_enabled()),
         menu.SEPARATOR,
         item("Открыть журнал", open_log),
@@ -417,7 +409,7 @@ def run_tray(args):
             engine.set_log(True)
         hint = ("" if engine.calibration.calibrated
                 else " Для точной точки взгляда — меню → «Калибровка взгляда».")
-        icon.notify("Работаю в фоне. Пищу, если %s не смотришь в экран или в кадре телефон.%s"
+        icon.notify("Работаю в фоне. Пищу, если %s не смотришь в экран.%s"
                     % (human_seconds(engine.away_after), hint), "Gaze Check")
 
     threading.Thread(target=prepare, daemon=True).start()

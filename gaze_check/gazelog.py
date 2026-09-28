@@ -20,7 +20,7 @@ NO_POINT = -32768
 SAMPLE_EVERY = 0.1  # с
 
 # флаги отсчёта
-FACE, BOTH_EYES, LOOKING, PHONE, CLOSED = 1, 2, 4, 8, 16
+FACE, BOTH_EYES, LOOKING, PHONE, CLOSED = 1, 2, 4, 8, 16  # PHONE больше не пишется (детектор убран), бит занят
 # события
 BLINK, DOUBLE, TRIPLE, RIGHT = 1, 2, 3, 4
 EVENT_NAMES = {BLINK: "моргание", DOUBLE: "двойное моргание", TRIPLE: "тройное моргание",
