@@ -444,6 +444,7 @@ class Engine:
         from .mouse import JOY_SPEED_DEFAULT
         self.joy_speed = float(getattr(args, "joy_speed", None) or JOY_SPEED_DEFAULT)  # множитель скорости
         self.gazelog = None  # лёгкий журнал взгляда (gazelog.GazeLog), когда пишется
+        self.report_thread = None  # отчёт по только что закрытому журналу
         self.log_probe = None
         self.log_closed_at = None
         self.menu_gestures = bool(getattr(args, "menu_gestures", False))  # открывать меню морганием
@@ -490,6 +491,8 @@ class Engine:
     def close(self):
         self.stop_recording()
         self.set_log(False)
+        if self.report_thread is not None:
+            self.report_thread.join(timeout=60)  # отчёт по журналу — дописать до выхода
         self.set_mouse(False)
         for addon in self.addons:
             addon.close()
@@ -767,8 +770,19 @@ class Engine:
             log, self.gazelog = self.gazelog, None
             path = log.close()
             print(time.strftime("%H:%M:%S"), "журнал взгляда сохранён:", path, flush=True)
+            # итоги как у записи сеанса — в фоне (день журнала — секунды); при выходе close() дождётся
+            self.report_thread = threading.Thread(target=self._report, args=(path,), daemon=True)
+            self.report_thread.start()
         self.state.set(logging=self.gazelog is not None)
         return path
+
+    @staticmethod
+    def _report(path):
+        try:
+            from .gazereport import build
+            print(time.strftime("%H:%M:%S"), "отчёт по журналу взгляда:", build(path), flush=True)
+        except Exception:
+            traceback.print_exc()  # отчёт не должен ронять программу
 
     def _log_frame(self, log, ts, feat, point, eye, label, events):
         """Кадр → журнал: события морганий каждый кадр, отсчёт — 10 раз в секунду."""
@@ -1333,6 +1347,8 @@ def _main(argv=None):
     ap.add_argument("--gaze-log", action="store_true", help="сразу вести лёгкий журнал взгляда (.gazelog)")
     ap.add_argument("--play", nargs="?", const="", metavar="ФАЙЛ",
                     help="проигрыватель журнала взгляда (без файла — последний)")
+    ap.add_argument("--report", nargs="?", const="", metavar="ФАЙЛ",
+                    help="отчёт по журналу взгляда, как у записи сеанса (без файла — последний журнал)")
     args = ap.parse_args(argv)
     try:  # пиксели экрана, окна и снимки экрана — в одних физических единицах
         import ctypes
@@ -1343,6 +1359,13 @@ def _main(argv=None):
     if args.play is not None:
         from .player import main as play
         return play(args.play or None)
+    if args.report is not None:
+        from .gazereport import build, latest_log
+        path = args.report or latest_log()
+        if not path:
+            sys.exit("Журналов взгляда нет")
+        print("отчёт:", build(path), flush=True)
+        return
     quiet_libraries()
     if (args.source is None or args.source.isdigit()) and not (args.window or args.no_window):
         from .tray import run_tray

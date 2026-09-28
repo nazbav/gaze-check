@@ -330,7 +330,8 @@ def run_tray(args):
         path = engine.set_log(engine.gazelog is None)
         save(gaze_log=engine.gazelog is not None)
         if path:
-            icon.notify("Журнал взгляда сохранён: %s" % path.name, "Gaze Check")
+            icon.notify("Журнал взгляда сохранён: %s. Итоги, как у записи, — в папке %s рядом."
+                        % (path.name, path.stem), "Gaze Check")
 
     def open_player(_icon, _item):
         import subprocess
