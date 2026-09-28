@@ -699,7 +699,8 @@ class Engine:
             elif self.closure_used and ev in ("armed", "menu_armed", "cancel", "right", "menu"):
                 continue  # это закрытие уже сработало в дополнении — ни правого клика, ни меню
             if any(addon.gesture(ev, ts) for addon in self.addons):
-                self.closure_used = ev == "armed"  # долгое закрытие занято — остальное из него не нужно
+                # долгое закрытие занято (на 2 или 3 с) — остальное из него не нужно
+                self.closure_used = ev in ("armed", "menu_armed")
                 continue
             out.append(ev)
             if ev == "armed" and self.mouse is not None and not self.menu.open:
