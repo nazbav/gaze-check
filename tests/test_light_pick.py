@@ -57,12 +57,13 @@ def test_close_lights_do_not_flip(tmp_path):
     assert eng.calibration is dark
 
 
-def test_unknown_light_reminds_once(tmp_path):
+def test_unknown_light_only_logged_once(tmp_path, capsys):
     eng, _, told = engine(tmp_path, [DARK])
     feed(eng, ODD, 0)
     for t in (30, 60, 95, 120):
         eng._pick_light(t)
-    assert len(told) == 1 and "Ctrl+Alt+C" in told[0]
+    assert told == []  # уведомлений нет — мешали
+    assert capsys.readouterr().out.count("не похож ни на одну калибровку") == 1
     feed(eng, DARK, 200, 70)  # свет снова знакомый — можно напомнить снова, когда опять сменится
     eng._pick_light(270)
     assert not eng.new_light_told

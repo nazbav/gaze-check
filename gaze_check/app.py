@@ -419,7 +419,7 @@ class Engine:
         self.light = LightWatch()  # свет по кадрам камеры
         self.light_auto = bool(getattr(args, "light_auto", True))  # выбирать калибровку по свету самой
         self.light_pick = None  # (калибровка, сколько проверок подряд она заметно ближе по свету)
-        self.new_light_since, self.new_light_told = None, False  # незнакомый свет — одно напоминание
+        self.new_light_since, self.new_light_told = None, False  # незнакомый свет — одна строка в журнал
         self.light_logged = None  # свет, записанный в журнал последним (пишется, когда заметно сменился)
         start = (self.store.nearest(self.camera, None)[0] if self.camera
                  else max(self.store.items, key=lambda c: c.meta.get("used", 0), default=None))
@@ -556,11 +556,11 @@ class Engine:
     LIGHT_EVERY = 10.0  # с: как часто сверять свет с калибровками
     LIGHT_MARGIN = 0.75  # насколько другая калибровка должна быть ближе по свету, чтобы на неё перейти
     LIGHT_CONFIRM = 2  # столько проверок подряд — чтобы не дёргалось от белой страницы на тёмном
-    NEW_LIGHT_AFTER = 60.0  # с незнакомого света — одно напоминание о быстрой подстройке
+    NEW_LIGHT_AFTER = 60.0  # с незнакомого света — строка в журнал (уведомления нет)
 
     def _pick_light(self, now):
         """Раз в LIGHT_EVERY: калибровка под текущий свет. Переход — если другая калибровка этой камеры
-        заметно ближе по свету LIGHT_CONFIRM проверок подряд; незнакомый свет — одно напоминание."""
+        заметно ближе по свету LIGHT_CONFIRM проверок подряд; незнакомый свет — строка в журнал."""
         import math
         from .light import KEYS, NEW, describe, distance
         sig = self.light.current()
@@ -577,11 +577,8 @@ class Engine:
             self.new_light_since = self.new_light_since or now
             if now - self.new_light_since >= self.NEW_LIGHT_AFTER and not self.new_light_told:
                 self.new_light_told = True
-                text = ("Свет не похож ни на одну калибровку (%s). Быстрая подстройка Ctrl+Alt+C — 5 точек, "
-                        "~8 с — запомнит его." % describe(sig))
-                print(time.strftime("%H:%M:%S"), text, flush=True)
-                if getattr(self.journal, "notify", None):
-                    self.journal.notify(text)
+                # только в журнал: уведомление мешало — подстройка Ctrl+Alt+C, когда самому захочется
+                print(time.strftime("%H:%M:%S"), "свет не похож ни на одну калибровку (%s)" % describe(sig), flush=True)
         elif d <= NEW:
             self.new_light_since, self.new_light_told = None, False
         cur = self.calibration
