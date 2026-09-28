@@ -1353,6 +1353,11 @@ def _main(argv=None):
     except (AttributeError, OSError):
         pass
     redirect_output()
+    try:  # падение в C-коде (ctypes, MediaPipe, камера) — стек всех потоков в журнал, а не молча
+        import faulthandler
+        faulthandler.enable(file=sys.stderr, all_threads=True)
+    except (AttributeError, OSError, ValueError, RuntimeError):
+        pass
     if args.play is not None:
         from .player import main as play
         return play(args.play or None)
