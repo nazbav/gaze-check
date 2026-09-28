@@ -527,6 +527,10 @@ class Engine:
             else:
                 replace = self.store.same_light(self.camera, light)
             self.store.put(cal, self.camera, light, replace)
+            from .calstore import title
+            print(time.strftime("%H:%M:%S"), "калибровка:", title(cal), "—",
+                  ("дополнила текущую" if quick else "заменила калибровку этого света") if replace is not None
+                  else "новая, под этот свет", flush=True)
         self.calibration = cal
         self.light_pick, self.new_light_since, self.new_light_told = None, None, False
         self.dirty, self.saved_at = False, time.monotonic()
