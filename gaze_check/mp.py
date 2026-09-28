@@ -6,6 +6,7 @@ matplotlib ещё и строит кэш шрифтов при каждом ст
 модули-заглушки (только если настоящие ещё не загружены).
 """
 import sys
+import threading
 import types
 
 _STUBS = ("matplotlib", "matplotlib.pyplot", "sounddevice")
@@ -27,13 +28,17 @@ def mediapipe():
 
 
 _blocked = None
+_lock = threading.Lock()
 
 
 def _offline():
-    """Загрузить библиотеку MediaPipe и сразу отрезать ей сеть (см. offline.py) — до первой модели."""
+    """Загрузить библиотеку MediaPipe и сразу отрезать ей сеть (см. offline.py) — до первой модели.
+    Под замком: поток глаз и поток телефона грузят MediaPipe одновременно, а две подмены таблицы
+    импорта разом снимали друг другу защиту страницы — вылет 0xc0000005 при запуске."""
     global _blocked
-    if _blocked is None:
-        from mediapipe.tasks.python.core import mediapipe_c_bindings
-        from .offline import block_network
-        _blocked = block_network(mediapipe_c_bindings.load_raw_library()._handle)
+    with _lock:
+        if _blocked is None:
+            from mediapipe.tasks.python.core import mediapipe_c_bindings
+            from .offline import block_network
+            _blocked = block_network(mediapipe_c_bindings.load_raw_library()._handle)
     return _blocked

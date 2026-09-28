@@ -81,8 +81,11 @@ def block_network(handle, dll="WININET.dll"):
                 if name in REPLACE:
                     stub = _stubs.setdefault(name, REPLACE[name]())
                     slot, old = base + iat + 8 * i, ctypes.c_ulong()
-                    if k32.VirtualProtect(slot, 8, PAGE_READWRITE, ctypes.byref(old)):
-                        ctypes.c_uint64.from_address(slot).value = ctypes.cast(stub, ctypes.c_void_p).value
+                    target = ctypes.cast(stub, ctypes.c_void_p).value
+                    if ctypes.c_uint64.from_address(slot).value == target:  # уже подменено
+                        done.append(name)
+                    elif k32.VirtualProtect(slot, 8, PAGE_READWRITE, ctypes.byref(old)):
+                        ctypes.c_uint64.from_address(slot).value = target
                         k32.VirtualProtect(slot, 8, old.value, ctypes.byref(old))
                         done.append(name)
                 i += 1
